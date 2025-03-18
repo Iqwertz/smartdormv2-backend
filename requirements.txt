@@ -1,0 +1,5 @@
+django==4.1
+psycopg2-binary<=2.10
+pytest<=8.3
+pytest-django<=4.9
+djangorestframework==3.14.0

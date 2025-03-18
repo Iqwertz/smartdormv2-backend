@@ -1,0 +1,36 @@
+<!-- templates/your_template.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tenant Dashboard</title>
+</head>
+<body>
+    <h2>Active Tenants</h2>
+    <ul>
+    {% for tenant in active_tenants %}
+        <li>{{ tenant.name }} {{ tenant.surname }}</li>
+    {% endfor %}
+    </ul>
+
+    <h2>University Tenants</h2>
+    <ul>
+    {% for tenant in university_tenants %}
+        <li>{{ tenant.name }} - {{ tenant.study_field }}</li>
+    {% endfor %}
+    </ul>
+
+    <h2>Tenant Details</h2>
+    {% if tenant_details %}
+        <p>Name: {{ tenant_details.name }}</p>
+        <p>Email: {{ tenant_details.email }}</p>
+        <p>Room: {{ tenant_details.current_room }}</p>
+    {% endif %}
+
+    <h2>Expiring Probations</h2>
+    <ul>
+    {% for tenant in expiring_probations %}
+        <li>{{ tenant.name }} - Probation ends: {{ tenant.probation_end }}</li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
