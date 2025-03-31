@@ -1,5 +1,5 @@
 # views.py
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import render, get_object_or_404, redirect
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,6 +13,9 @@ from smartdorm.models import (
     get_expiring_probations
 )
 from smartdorm.serializers import TenantSerializer
+
+from django.contrib.auth import authenticate, login
+from django.http import JsonResponse
 
 def tenant_dashboard(request):
     # Get all the data
@@ -88,3 +91,20 @@ class TenantDetailAPIView(APIView):
         tenant = get_object_or_404(Tenant, pk=pk)
         tenant.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def login_view(request):
+    error_message = None
+    
+    if request.method == 'POST':
+        username = request.POST.get('username')
+        password = request.POST.get('password')
+        
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            login(request, user)
+            return redirect('tenant_dashboard')  # Redirect to dashboard after login
+        else:
+            error_message = "Invalid credentials. Please try again."
+    
+    return render(request, 'login.html', {'error_message': error_message})
