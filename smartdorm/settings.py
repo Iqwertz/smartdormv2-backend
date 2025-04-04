@@ -58,6 +58,11 @@ USE_TZ = True
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+MIDDLEWARE = [
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+]
+
 # LDAP server configuration
 AUTH_LDAP_SERVER_URI = "ldap://ldap.schollheim.net:389"
 AUTH_LDAP_BIND_DN = "cn=admin,dc=schollheim,dc=net"
