@@ -3,7 +3,6 @@ from django.shortcuts import render, get_object_or_404, redirect
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.decorators import api_view
 
 from smartdorm.models import (
     Tenant,
@@ -14,8 +13,8 @@ from smartdorm.models import (
 )
 from smartdorm.serializers import TenantSerializer
 
-from django.contrib.auth import authenticate, login
-from django.http import JsonResponse
+from django.contrib.auth import login
+from django_auth_ldap.backend import LDAPBackend
 
 def tenant_dashboard(request):
     # Get all the data
@@ -95,16 +94,22 @@ class TenantDetailAPIView(APIView):
 
 def login_view(request):
     error_message = None
-    
+
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
-        
-        user = authenticate(request, username=username, password=password)
-        if user is not None:
-            login(request, user)
-            return redirect('tenant_dashboard')  # Redirect to dashboard after login
-        else:
-            error_message = "Invalid credentials. Please try again."
-    
+
+        try:
+            ldap_backend = LDAPBackend()
+
+            user = ldap_backend.authenticate(request, username=username, password=password)
+
+            if user is not None:
+                login(request, user, backend='django_auth_ldap.backend.LDAPBackend')
+                return redirect('tenant_dashboard')
+            else:
+                error_message = "LDAP authentication failed. Invalid credentials."
+        except Exception as e:
+            error_message = f"LDAP error: {str(e)}"
+
     return render(request, 'login.html', {'error_message': error_message})
