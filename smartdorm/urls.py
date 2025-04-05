@@ -4,7 +4,7 @@ from django.urls import path
 from django.views.generic import TemplateView
 
 from django.conf import settings
-from smartdorm.views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView, login_view
+from smartdorm.views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView, login_view, logout_view, me_view
 
 urlpatterns = [
     path('', TemplateView.as_view(template_name="home.html")),
@@ -14,4 +14,6 @@ urlpatterns = [
     path('api/tenants/', TenantListCreateAPIView.as_view(), name='tenant-list-create'),
     path('api/tenants/<int:pk>/', TenantDetailAPIView.as_view(), name='tenant-detail'),
     path('api/login/', login_view, name='api-login'),
+    path('api/logout/', logout_view, name='logout'),
+    path('api/me/', me_view, name='me'),
 ]

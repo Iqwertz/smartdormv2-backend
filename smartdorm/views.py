@@ -1,5 +1,5 @@
 # views.py
-from django.shortcuts import render, get_object_or_404, redirect
+from django.shortcuts import render, get_object_or_404
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,8 +13,10 @@ from smartdorm.models import (
 )
 from smartdorm.serializers import TenantSerializer
 
-from django.contrib.auth import login
+from django.contrib.auth import login, logout
 from django_auth_ldap.backend import LDAPBackend
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 
 def tenant_dashboard(request):
     # Get all the data
@@ -94,6 +96,7 @@ class TenantDetailAPIView(APIView):
 
 def login_view(request):
     error_message = None
+    success_message = None
 
     if request.method == 'POST':
         username = request.POST.get('username')
@@ -101,15 +104,74 @@ def login_view(request):
 
         try:
             ldap_backend = LDAPBackend()
-
             user = ldap_backend.authenticate(request, username=username, password=password)
 
             if user is not None:
                 login(request, user, backend='django_auth_ldap.backend.LDAPBackend')
-                return redirect('tenant_dashboard')
-            else:
-                error_message = "LDAP authentication failed. Invalid credentials."
-        except Exception as e:
-            error_message = f"LDAP error: {str(e)}"
 
-    return render(request, 'login.html', {'error_message': error_message})
+                return JsonResponse({
+                    "success": True,
+                    "message": f"You are logged in as {user.username}",
+                    "user": {
+                        "username": user.username,
+                        "email": user.email
+                    }
+                })
+            else:
+                return JsonResponse({
+                    "success": False,
+                    "message": "Authentication failed. Invalid credentials."
+                }, status=401)
+        except Exception as e:
+            return JsonResponse({
+                "success": False,
+                "message": f"Error: {str(e)}"
+            }, status=500)
+
+    # For GET requests, return status information
+    elif request.method == 'GET':
+        if request.user.is_authenticated:
+            return JsonResponse({
+                "success": True,
+                "message": f"User is already authenticated as {request.user.username}",
+                "user": {
+                    "username": request.user.username,
+                    "email": request.user.email
+                }
+            })
+        else:
+            return JsonResponse({
+                "success": False,
+                "message": "Not authenticated"
+            })
+
+    return JsonResponse({
+        "success": False,
+        "message": "Method not allowed"
+    }, status=405)
+
+
+@csrf_exempt
+def logout_view(request):
+    logout(request)
+    return JsonResponse({"success": True, "message": "Successfully logged out"})
+
+
+def me_view(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({
+            "authenticated": False,
+            "message": "Not authenticated"
+        }, status=401)
+
+    user = request.user
+
+    return JsonResponse({
+        "authenticated": True,
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email": user.email,
+        "is_staff": user.is_staff,
+        "last_login": user.last_login.isoformat() if user.last_login else None
+    })
