@@ -1,19 +1,20 @@
-# Django URLs
-
-from django.urls import path
+from django.urls import path, include
 from django.views.generic import TemplateView
+from .views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
+from . import auth_views 
 
-from django.conf import settings
-from smartdorm.views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView, login_view, logout_view, me_view
+# Group auth related URLs under /api/auth/
+auth_urlpatterns = [
+    path('login/', auth_views.login_view, name='api-login'),
+    path('logout/', auth_views.logout_view, name='api-logout'),
+    path('me/', auth_views.me_view, name='api-me'),
+]
 
 urlpatterns = [
     path('', TemplateView.as_view(template_name="home.html")),
     path('tenant-dashboard/', tenant_dashboard, name='tenant_dashboard'),
-    
-    # API endpoints
     path('api/tenants/', TenantListCreateAPIView.as_view(), name='tenant-list-create'),
     path('api/tenants/<int:pk>/', TenantDetailAPIView.as_view(), name='tenant-detail'),
-    path('api/login/', login_view, name='api-login'),
-    path('api/logout/', logout_view, name='logout'),
-    path('api/me/', me_view, name='me'),
+
+    path('api/auth/', include(auth_urlpatterns)),
 ]
