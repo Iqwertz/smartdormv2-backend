@@ -30,7 +30,7 @@ class HasUserTypePermission(BasePermission):
         if not required_employee_types:  # If empty, no employeeType restriction
             return True
         
-        employee_type = request.user.user_type
+        employee_type = request.user.first_name  # We used first_name for employeeType in the LDAP mapping
         return employee_type in required_employee_types
 
 # Combined permission class, I think these both checks are sufficient to cover all auth cases in smartdorm (?)

@@ -108,10 +108,9 @@ AUTH_LDAP_USER_SEARCH = LDAPSearch(
 # --- User Attribute Mapping ---
 # Map LDAP attributes to Django User model fields
 AUTH_LDAP_USER_ATTR_MAP = {
-    "first_name": "givenName",
+    "first_name": "employeeType", #we use the first_name field for employeeType, since the standard Django user model, doesnt have a field for it. I think we can use it for now. @yassin do you think we should create a custom user model?
     "last_name": "sn",
     "email": "mail",
-    "user_type": "employeeType"
 }
 
 # --- Group Search and Handling ---

@@ -23,7 +23,7 @@ def get_user_data(user):
         "groups": group_names,
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
-        "user_type": user.user_type #Tenant or Verwaltung
+        "user_type": user.first_name #Tenant or Verwaltung, uses first_name field for employeeType (see settings.py)
     }
 
 @api_view(['POST'])
@@ -31,10 +31,9 @@ def get_user_data(user):
 @authentication_classes([SessionAuthentication]) # Use session auth
 def login_view(request):
     try:
-        data = json.loads(request.body)
-        username = data.get('username')
-        password = data.get('password')
-        remember_me = data.get('rememberMe', False)
+        username = request.data.get('username')
+        password = request.data.get('password')
+        remember_me = request.data.get('rememberMe', False)
     except json.JSONDecodeError:
         return Response({"success": False, "message": "Invalid JSON data"}, status=status.HTTP_400_BAD_REQUEST)
 
