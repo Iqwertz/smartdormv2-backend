@@ -85,26 +85,12 @@ def me_view(request):
         return Response({"authenticated": False, "message": "User authenticated but data unavailable"}, status=status.HTTP_404_NOT_FOUND)
 
 # --- Example Protected View ---
-# from rest_framework.permissions import BasePermission
 #
-# class HasGroupPermission(BasePermission):
-#     """
-#     Ensures the user is in a required group.
-#     """
-#     required_groups = []
-#
-#     def has_permission(self, request, view):
-#         if not request.user or not request.user.is_authenticated:
-#             return False
-#         user_groups = [group.name for group in request.user.groups.all()]
-#         return any(group in user_groups for group in self.required_groups)
-#
-# class IsVerwaltungUser(HasGroupPermission):
-#      required_groups = ['VERWALTUNG', 'ADMIN'] # Allow Verwaltung or ADMIN
-#
-# @api_view(['GET'])
-# @permission_classes([IsAuthenticated, IsVerwaltungUser]) # Must be logged in AND in VERWALTUNG/ADMIN group
-# @authentication_classes([SessionAuthentication])
-# def admin_only_data(request):
-#     # This view is only accessible to users in the 'VERWALTUNG' or 'ADMIN' group
-#     return Response({"message": "Secret admin data!"})
+# Tenant dashboard: Specific groups and employee type
+#@api_view(['GET'])
+#@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+#@authentication_classes([SessionAuthentication])
+#def netzwerk_dashboard_view(request):
+#    tenant_dashboard_view.required_groups = ['Netzwerkreferat']
+#    tenant_dashboard_view.required_employee_types = ['TENANT']
+#    return Response({"message": "Welcome to the netwerk dashboard!"})
