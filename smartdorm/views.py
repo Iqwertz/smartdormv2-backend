@@ -105,7 +105,6 @@ def login_view(request):
         try:
             ldap_backend = LDAPBackend()
             user = ldap_backend.authenticate(request, username=username, password=password)
-
             if user is not None:
                 login(request, user, backend='django_auth_ldap.backend.LDAPBackend')
 

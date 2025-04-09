@@ -8,23 +8,13 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
-
+from pprint import pprint
+from django.contrib.auth.models import User
 # Helper function to build the user data object
 def get_user_data(user):
     if not user or not user.is_authenticated:
         return None
-
-    # Get group names directly from the user object populated by django-auth-ldap
     group_names = [group.name for group in user.groups.all()]
-
-    # Determine primary role of the user
-    primary_role = None
-    if "VERWALTUNG" in group_names:
-        primary_role = "admin"
-    elif "tenant" in group_names:
-         primary_role = "tenant"
-    # We may need to do some more fine-grained role checking here in the future
-
     return {
         "username": user.username,
         "name": user.first_name,
@@ -33,7 +23,7 @@ def get_user_data(user):
         "groups": group_names,
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
-        "primary_role": primary_role 
+        "user_type": user.user_type #Tenant or Verwaltung
     }
 
 @api_view(['POST'])
@@ -54,10 +44,9 @@ def login_view(request):
     user = authenticate(request, username=username, password=password)
 
     if user is not None:
-        # Regenerate session ID on login (good pactice to prevent session fixation attacks)
+        # Regenerate session ID on login
         auth_login(request, user)
 
-        # Handle "Remember Me"
         if remember_me:
             # Use the long expiry defined in settings.SESSION_COOKIE_AGE
             request.session.set_expiry(None)
@@ -67,7 +56,6 @@ def login_view(request):
 
         user_data = get_user_data(user)
         if user_data:
-             # Include CSRF token in response if needed by frontend for subsequent POST/PUT/DELETE
              # response_data = {"success": True, "user": user_data, "csrfToken": get_token(request)}
              response_data = {"success": True, "user": user_data}
              return Response(response_data, status=status.HTTP_200_OK)
@@ -89,6 +77,7 @@ def logout_view(request):
 @permission_classes([IsAuthenticated])
 @authentication_classes([SessionAuthentication])
 def me_view(request):
+    pprint(request, indent=2)
     user_data = get_user_data(request.user)
     if user_data:
         return Response({"authenticated": True, "user": user_data}, status=status.HTTP_200_OK)

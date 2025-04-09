@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import ldap
-from django_auth_ldap.config import LDAPSearch, GroupOfNamesType, PosixGroupType, LDAPSearchUnion # Added PosixGroupType, LDAPSearchUnion
+from django_auth_ldap.config import LDAPSearch, LDAPSearchUnion, GroupOfNamesType
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY")
@@ -98,10 +98,6 @@ CORS_ALLOW_CREDENTIALS = True # Important for cookies/sessions
 AUTH_LDAP_SERVER_URI = "ldap://ldap.schollheim.net:389"
 AUTH_LDAP_BIND_DN = "cn=admin,dc=schollheim,dc=net"
 AUTH_LDAP_BIND_PASSWORD = os.environ.get("LDAP_ADMIN_PASSWORD")
-AUTH_LDAP_CONNECTION_OPTIONS = {
-    ldap.OPT_REFERRALS: 0,
-}
-
 # User search configuration
 AUTH_LDAP_USER_SEARCH = LDAPSearch(
     "dc=schollheim,dc=net",
@@ -115,6 +111,7 @@ AUTH_LDAP_USER_ATTR_MAP = {
     "first_name": "givenName",
     "last_name": "sn",
     "email": "mail",
+    "user_type": "employeeType"
 }
 
 # --- Group Search and Handling ---
@@ -124,19 +121,11 @@ AUTH_LDAP_GROUP_SEARCH = LDAPSearchUnion(
     LDAPSearch("ou=roles,dc=schollheim,dc=net", ldap.SCOPE_SUBTREE, "(objectClass=groupOfNames)"),
     LDAPSearch("ou=groups2,dc=schollheim,dc=net", ldap.SCOPE_SUBTREE, "(objectClass=groupOfNames)"),
 )
+AUTH_LDAP_GROUP_TYPE = GroupOfNamesType()
 
-AUTH_LDAP_GROUP_TYPE = GroupOfNamesType(name_attr="cn")
+AUTH_LDAP_MIRROR_GROUPS = True
 
-# --- Populate Django User object ---
-# Dont know if this is the best way to do this, but it seems to be the most common way
-#@Yassin if you now something better, let me know
-AUTH_LDAP_USER_FLAGS_BY_GROUP = {
-     "is_staff": "cn=VERWALTUNG,ou=roles,dc=schollheim,dc=net",
-     "is_superuser": "cn=ADMIN,ou=roles,dc=schollheim,dc=net",
- }
-# This setting allows for group membership to be checked against the LDAP server.
-# We can also use try to mirror the LDAP groups to Django groups. (Dont really know right now if we need this)
-AUTH_LDAP_FIND_GROUP_PERMS = True
+AUTH_LDAP_CACHE_TIMEOUT = 3600  # 1 hour
 
 # --- Authentication Backend ---
 AUTHENTICATION_BACKENDS = [

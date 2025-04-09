@@ -58,3 +58,18 @@ This demo:
 - Creates a test tenant via API POST request
 - Retrieves all tenants to verify addition
 - Deletes the test tenant via API DELETE request
+
+## LDAP commands useful for testing
+Get all user attributes:
+```bash
+ldapsearch -x -LLL \
+  -H ldap://ldap.schollheim.net:389 \
+  -D "cn=admin,dc=schollheim,dc=net" -W \
+  -b "dc=schollheim,dc=net" \
+  "(cn=username)" \
+  \* +
+```
+List all available Groups:
+```bash
+ldapsearch -x -LLL -b "ou=groups2,dc=schollheim,dc=net" -D "cn=admin,dc=schollheim,dc=net" -W "(objectClass=groupOfNames)" cn -H ldap://ldap.schollheim.net:389
+```
