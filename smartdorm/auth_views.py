@@ -76,7 +76,6 @@ def logout_view(request):
 @permission_classes([IsAuthenticated])
 @authentication_classes([SessionAuthentication])
 def me_view(request):
-    pprint(request, indent=2)
     user_data = get_user_data(request.user)
     if user_data:
         return Response({"authenticated": True, "user": user_data}, status=status.HTTP_200_OK)

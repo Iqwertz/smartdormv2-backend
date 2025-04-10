@@ -1,4 +1,4 @@
-# views.py #@Yassin didnt update this file, I think we want to put all normal views here or? If so we then need to use the new permission management like i have wrote down in the auth_views.py at the bottom. 
+# views.py #@Yassin didnt update this file, I think we want to group all tenant related views into the tenant_views.py and all "Verwaltungs" views into admin_views.py or? If so we then need to use the new permission management like i have wrote down in the auth_views.py at the bottom. 
 from django.shortcuts import render, get_object_or_404
 from rest_framework import status
 from rest_framework.response import Response
