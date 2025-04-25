@@ -2,6 +2,18 @@
 
 # Smart Dorm Backend Server Script
 
+#Redis check
+echo "Checking Redis connection..."
+if ! redis-cli ping > /dev/null 2>&1; then
+    echo "Error: Redis server is not responding on localhost:6379."
+    echo "Please ensure Redis is installed and running."
+    echo " - On Linux: sudo systemctl start redis-server"
+    echo " - On WSL2: sudo service redis-server start"
+    echo " - On macOS: brew services start redis"
+    return
+fi
+echo "Redis connection successful."
+
 # Load environment variables from .env file
 if [ -f .env ]; then
   source .env

@@ -1,4 +1,4 @@
-# views.py
+# views.py #@Yassin didnt update this file, I think we want to group all tenant related views into the tenant_views.py and all "Verwaltungs" views into admin_views.py or? If so we then need to use the new permission management like i have wrote down in the auth_views.py at the bottom. 
 from django.shortcuts import render, get_object_or_404
 from rest_framework import status
 from rest_framework.response import Response
@@ -105,7 +105,6 @@ def login_view(request):
         try:
             ldap_backend = LDAPBackend()
             user = ldap_backend.authenticate(request, username=username, password=password)
-
             if user is not None:
                 login(request, user, backend='django_auth_ldap.backend.LDAPBackend')
 
