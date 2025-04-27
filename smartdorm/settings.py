@@ -76,6 +76,10 @@ SESSION_CACHE_ALIAS = "default"
 SESSION_COOKIE_AGE = 1209600  # 2 Weeks
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 
+# ICS Calendar
+NEXTCLOUD_ICS_URL = os.environ.get("NEXTCLOUD_ICS_URL", "https://cloud.schollheim.net/remote.php/dav/public-calendars/8BXCQ5JxXGGQzr2w/?export") #Used to generate a preview to the calendar
+NEXTCLOUD_CALENDAR_URL = os.environ.get("NEXTCLOUD_CALENDAR_URL", "https://cloud.schollheim.net/apps/calendar/p/8BXCQ5JxXGGQzr2w/dayGridMonth/now") # Used to redirect users to the full calendar
+
 # --- Cache (for Sessions) Configuration ---
 CACHES = {
     "default": {
@@ -108,7 +112,7 @@ AUTH_LDAP_USER_SEARCH = LDAPSearch(
 # --- User Attribute Mapping ---
 # Map LDAP attributes to Django User model fields
 AUTH_LDAP_USER_ATTR_MAP = {
-    "first_name": "employeeType", #we use the first_name field for employeeType, since the standard Django user model, doesnt have a field for it. I think we can use it for now. @yassin do you think we should create a custom user model?
+    "first_name": "employeeType", #we use the first_name field for employeeType, since the standard Django user model, doesnt have a field for it. I think we can use it for now. 
     "last_name": "sn",
     "email": "mail",
 }

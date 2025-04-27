@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.views.generic import TemplateView
 from .views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
 from . import auth_views 
-from .tenant_views import profile_data_view
+from . import tenant_views
 from . import department_views
 
 # Group auth related URLs under /api/auth/
@@ -20,7 +20,9 @@ urlpatterns = [
     path('api/admin/<int:pk>/', TenantDetailAPIView.as_view(), name='tenant-detail'),
     
     # Tenant Specific Views
-    path('api/tenants/profile-data', profile_data_view, name='profile-data'),
+    path('api/tenants/profile-data', tenant_views.profile_data_view, name='profile-data'),
+    path('api/tenants/calendar-proxy', tenant_views.calendar_proxy_view, name='calendar-proxy'), # Used to fetch the ICS calendar file from Nextcloud
+    path('api/tenants/my-engagements', tenant_views.my_engagements_view, name='my-engagements'),
 
     # Department Specific Views
     path('api/department/tenant-data', department_views.all_tenant_data_view, name='department-tenant-data'), 
