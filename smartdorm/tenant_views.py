@@ -12,9 +12,10 @@ from rest_framework import status
 from django.conf import settings
 from django.http import HttpResponseServerError, HttpResponse
 import logging
+from smartdorm.serializers import TenantSerializer, EngagementSerializer
 
 from .permissions import GroupAndEmployeeTypePermission
-from .models import Tenant
+from .models import Tenant, Engagement
 from .serializers import TenantSerializer
 
 logger = logging.getLogger(__name__)
@@ -94,3 +95,38 @@ def calendar_proxy_view(request):
     except Exception as e:
         logger.exception(f"Unexpected error in calendar proxy view: {e}")
         return JsonResponse({"error": "An unexpected server error occurred."}, status=500)
+    
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated]) # User must be logged in
+@authentication_classes([SessionAuthentication])
+def my_engagements_view(request):
+    """
+    Responds with a list of Engagement objects associated with the
+    currently logged-in user, if they exist as a Tenant.
+    """
+    logged_in_username = request.user.username
+
+    try:
+        # Find the Tenant profile linked to the logged-in Django user
+        tenant = Tenant.objects.get(username=logged_in_username)
+        # Fetch engagements for this tenant
+        engagements = Engagement.objects.filter(tenant=tenant).select_related('department').order_by('-semester') # Fetch department too
+        serializer = EngagementSerializer(engagements, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Tenant.DoesNotExist:
+        # If the logged-in user doesn't have a Tenant profile, return empty list
+        return Response([], status=status.HTTP_200_OK) # Or 404 if you prefer
+    except Tenant.MultipleObjectsReturned:
+        # This shouldn't happen with unique usernames, but handle defensively
+        return Response(
+            {"error": "Multiple tenant profiles found for the logged-in user. Please contact admin."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    except Exception as e:
+         # Catch other potential errors
+        return Response(
+            {"error": f"An unexpected error occurred: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
