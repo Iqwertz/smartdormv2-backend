@@ -3,6 +3,7 @@ from django.views.generic import TemplateView
 from .views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
 from . import auth_views 
 from .tenant_views import profile_data_view
+from . import department_views
 
 # Group auth related URLs under /api/auth/
 auth_urlpatterns = [
@@ -18,7 +19,11 @@ urlpatterns = [
     path('api/admin/', TenantListCreateAPIView.as_view(), name='tenant-list-create'), #@Yassin Moved your tenant endpoint to /api/admin/ since create and delete will be a only admin task
     path('api/admin/<int:pk>/', TenantDetailAPIView.as_view(), name='tenant-detail'),
     
+    # Tenant Specific Views
     path('api/tenants/profile-data', profile_data_view, name='profile-data'),
+
+    # Department Specific Views
+    path('api/department/tenant-data', department_views.all_tenant_data_view, name='department-tenant-data'), 
     
     path('api/auth/', include(auth_urlpatterns)),
 ]

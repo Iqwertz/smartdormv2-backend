@@ -60,7 +60,6 @@ def login_view(request):
              return Response(response_data, status=status.HTTP_200_OK)
         else:
              return Response({"success": False, "message": "Login successful but failed to retrieve user data."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     else:
         return Response({"success": False, "message": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
