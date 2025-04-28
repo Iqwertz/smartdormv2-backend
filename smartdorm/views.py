@@ -9,14 +9,34 @@ from smartdorm.models import (
     get_tenants_by_university, 
     get_active_tenants, 
     get_tenant_details, 
-    get_expiring_probations
+    get_expiring_probations,
+    EngagementApplication,
 )
+from .models import Tenant
 from smartdorm.serializers import TenantSerializer
 
 from django.contrib.auth import login, logout
 from django_auth_ldap.backend import LDAPBackend
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.shortcuts import get_object_or_404
+
+from io import BytesIO
+from PIL import Image as PILImage
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Image,
+    Table,
+    TableStyle,
+    PageBreak
+)
 
 def tenant_dashboard(request):
     # Get all the data
@@ -174,3 +194,119 @@ def me_view(request):
         "is_staff": user.is_staff,
         "last_login": user.last_login.isoformat() if user.last_login else None
     })
+
+
+class PDFGenerator:
+    """Class to handle PDF generation for engagement applications."""
+
+    def __init__(self):
+        self.styles = getSampleStyleSheet()
+        self.title_style = ParagraphStyle(
+            'Title',
+            parent=self.styles['Heading1'],
+            alignment=TA_CENTER,
+            spaceAfter=12
+        )
+        self.heading_style = self.styles['Heading2']
+        self.normal_style = self.styles['Normal']
+
+        self.pagesize = A4
+        self.available_width = self.pagesize[0] - 2 * inch
+        self.max_img_width = 2.5 * inch
+        self.max_img_height = 3 * inch
+
+    def resize_image(self, img_data, max_w, max_h):
+        try:
+            pil_img = PILImage.open(img_data)
+            img_w, img_h = pil_img.size
+            aspect = img_w / float(img_h)
+
+            if img_w > img_h:
+                final_w = min(max_w, max_w)
+                final_h = final_w / aspect
+                if final_h > max_h:
+                    final_h = max_h
+                    final_w = final_h * aspect
+            else:
+                final_h = min(max_h, max_h)
+                final_w = final_h * aspect
+                if final_w > max_w:
+                    final_w = max_w
+                    final_h = final_w / aspect
+
+            return Image(img_data, width=final_w, height=final_h)
+        except Exception as e:
+            return Paragraph(f"Cannot display image: {e}", self.styles['Normal'])
+
+    def create_application_element(self, application):
+        elements = []
+
+        elements.append(Paragraph(
+            f"Bewerbung von {application.tenant.name} {application.tenant.surname} "
+            f"für {application.department.name}",
+            self.heading_style
+        ))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        text_content = Paragraph(application.motivation, self.normal_style)
+        img_content = Spacer(1, 0.1 * inch)
+
+        if application.image:
+            img_content = self.resize_image(
+                BytesIO(application.image),
+                self.max_img_width,
+                self.max_img_height
+            )
+
+        table_data = [[text_content, img_content]]
+        col_widths = [self.available_width - self.max_img_width - 20, self.max_img_width]
+
+        table = Table(table_data, colWidths=col_widths)
+        # set the height of the image cell to be the same as the text
+        table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (0, 0), 0),
+            ('RIGHTPADDING', (0, 0), (0, 0), 10),
+            ('LEFTPADDING', (1, 0), (1, 0), 10),
+            ('RIGHTPADDING', (1, 0), (1, 0), 0),
+        ]))
+
+        elements.append(table)
+        return elements
+
+    def generate_pdf(self, applications, title="Bewerbungen - WS24/25"):
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=self.pagesize)
+
+        elements = [
+            Paragraph(title, self.title_style),
+            Spacer(1, 0.5 * inch)
+        ]
+
+        for i, application in enumerate(applications):
+            elements.extend(self.create_application_element(application))
+
+            # each application is separated by a page break
+            if i < len(applications) - 1:
+                elements.append(PageBreak())
+            else:
+                elements.append(Spacer(1, 0.5 * inch))
+
+        doc.build(elements)
+        pdf = buffer.getvalue()
+        buffer.close()
+
+        return pdf
+
+
+def generate_applications_pdf(request):
+    applications = EngagementApplication.objects.select_related('department', 'tenant').filter(semester="WS24/25")
+
+    pdf_generator = PDFGenerator()
+    pdf = pdf_generator.generate_pdf(applications)
+
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = 'attachment; filename="engagement_applications.pdf"'
+    response.write(pdf)
+
+    return response
