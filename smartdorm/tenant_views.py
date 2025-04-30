@@ -12,7 +12,12 @@ from rest_framework import status
 from django.conf import settings
 from django.http import HttpResponseServerError, HttpResponse
 import logging
-from smartdorm.serializers import TenantSerializer, EngagementSerializer
+from smartdorm.serializers import TenantSerializer, EngagementSerializer, HsvTenantSerializer
+from .models import Engagement
+from django.db.models import Prefetch
+from django.utils import timezone  
+from collections import defaultdict
+from django.db.models import F
 
 from .permissions import GroupAndEmployeeTypePermission
 from .models import Tenant, Engagement
@@ -128,5 +133,67 @@ def my_engagements_view(request):
          # Catch other potential errors
         return Response(
             {"error": f"An unexpected error occurred: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        
+# TODO: Implement dynamic current semester logic later
+CURRENT_SEMESTER = "WS24/25"
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def hsv_engagement_list_view(request):
+    today = timezone.now().date()
+
+    semester_filter = request.GET.get('semester', None)
+    if not semester_filter:
+        semester_filter = CURRENT_SEMESTER # Default to current semester
+
+    try:
+        active_tenant_ids = Tenant.objects.filter(
+            move_in__lte=today,
+            move_out__gte=today
+        ).values_list('id', flat=True)
+
+        engagements_query = Engagement.objects.filter(
+            tenant_id__in=active_tenant_ids,
+            semester=semester_filter
+        ).select_related('tenant', 'department').order_by(
+            'department__name', 'tenant__surname', 'tenant__name' 
+        )
+
+        grouped_engagements = defaultdict(list)
+        department_details = {}
+
+        for eng in engagements_query:
+            dept_id = eng.department.id
+            if dept_id not in department_details:
+                 department_details[dept_id] = {
+                     'name': eng.department.name,
+                     'full_name': eng.department.full_name
+                 }
+            grouped_engagements[dept_id].append(eng.tenant)
+
+        output_data = []
+        for dept_id, tenants in grouped_engagements.items():
+            dept_info = department_details[dept_id]
+            output_data.append({
+                'department_id': dept_id,
+                'department_name': dept_info['name'],
+                'department_full_name': dept_info['full_name'],
+                'semester': semester_filter, 
+                'tenants': HsvTenantSerializer(tenants, many=True).data
+            })
+
+        output_data.sort(key=lambda x: x['department_name'])
+
+        return Response(output_data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        print(f"Error retrieving HSV engagement data: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response(
+            {"error": "An error occurred while retrieving HSV data."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
