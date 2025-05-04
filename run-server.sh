@@ -27,6 +27,7 @@ export DB_PASSWORD
 export PGPASSWORD="${DB_PASSWORD}"
 
 # Check database connection
+echo "psql -h ${DB_HOST} -U ${POSTGRES_USER} -p ${DB_PORT} -d ${POSTGRES_DB} -c 'SELECT 1'"
 echo "Checking database connection..."
 if ! psql -h "${DB_HOST}" -U "${POSTGRES_USER}" -p "${DB_PORT}" -d "${POSTGRES_DB}" -c "SELECT 1" > /dev/null 2>&1; then
     echo "Error: Could not connect to database. Please check your connection settings."
