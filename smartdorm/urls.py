@@ -1,6 +1,8 @@
 from django.urls import path, include
 from django.views.generic import TemplateView
-from .views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView, generate_applications_pdf
+
+from .department_views import generate_applications_pdf
+from .views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
 from . import auth_views 
 from . import tenant_views
 from . import department_views
