@@ -34,3 +34,12 @@ class EngagementSerializer(serializers.ModelSerializer):
             'external_id' 
         ]
         read_only_fields = ['id', 'department', 'external_id']
+        
+        
+class HsvTenantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tenant
+        fields = [
+            'name', 'surname', 'email', 'tel_number', 'current_room', 'current_floor'
+        ]
+        read_only_fields = fields
