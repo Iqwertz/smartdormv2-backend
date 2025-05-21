@@ -20,8 +20,8 @@ from collections import defaultdict
 from django.db.models import F
 
 from .permissions import GroupAndEmployeeTypePermission
-from .models import Tenant, Engagement
-from .serializers import TenantSerializer
+from .models import Tenant, Engagement, GlobalAppSettings
+from .serializers import TenantSerializer, GlobalAppSettingsSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -136,18 +136,17 @@ def my_engagements_view(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         
-# TODO: Implement dynamic current semester logic later
-CURRENT_SEMESTER = "WS24/25"
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated])
 def hsv_engagement_list_view(request):
     today = timezone.now().date()
+    settings = GlobalAppSettings.load()
 
     semester_filter = request.GET.get('semester', None)
     if not semester_filter:
-        semester_filter = CURRENT_SEMESTER # Default to current semester
+        semester_filter = settings.current_semester
 
     try:
         active_tenant_ids = Tenant.objects.filter(
@@ -195,5 +194,23 @@ def hsv_engagement_list_view(request):
         traceback.print_exc()
         return Response(
             {"error": "An error occurred while retrieving HSV data."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def get_global_settings_view(request):
+    """
+    API endpoint to retrieve all global application settings.
+    """
+    try:
+        settings = GlobalAppSettings.load()
+        serializer = GlobalAppSettingsSerializer(settings)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error retrieving global settings: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while retrieving global settings."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

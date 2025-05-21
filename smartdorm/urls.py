@@ -25,10 +25,13 @@ urlpatterns = [
     path('api/tenants/profile-data', tenant_views.profile_data_view, name='profile-data'),
     path('api/tenants/calendar-proxy', tenant_views.calendar_proxy_view, name='calendar-proxy'), # Used to fetch the ICS calendar file from Nextcloud
     path('api/tenants/hsv', tenant_views.hsv_engagement_list_view, name='hsv-engagement-list'),
-    path('api/tenants/my-engagements', tenant_views.my_engagements_view, name='my-engagements'),
+    path('api/tenants/my-engagements', tenant_views.my_engagements_view, name='my-engagements'),    
+    path('api/tenants/global-settings', tenant_views.get_global_settings_view, name='global-settings'),
 
     # Engagement Specific Views
-    path('api/engagements/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'), #Generate PDF for all applications in a certain semester
+    path('api/engagements/heimrat/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'), #Generate PDF for all applications in a certain semester
+    path('api/engagements/heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'), 
+    path('api/engagements/heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'), 
 
     # Department Specific Views
     path('api/department/tenant-data', department_views.all_tenant_data_view, name='department-tenant-data'), 

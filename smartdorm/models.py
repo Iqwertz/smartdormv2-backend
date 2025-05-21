@@ -1,7 +1,9 @@
 from django.db import models
 from django.utils import timezone
 from datetime import timedelta
+import logging
 
+logger = logging.getLogger(__name__) 
 class Tenant(models.Model):
     id = models.IntegerField(primary_key=True)
     birthday = models.DateField()
@@ -224,3 +226,54 @@ class OfflineUserPermissions(models.Model):
     class Meta:
         db_table = 'offline_user_permissions'
         managed = False
+        
+class GlobalAppSettings(models.Model):
+    # Singleton model: there should only be one instance of this model.
+    id = models.PositiveIntegerField(primary_key=True, default=1, editable=False)
+    current_semester = models.CharField(
+        max_length=50,
+        default="SS25",
+        help_text="Current academic semester (e.g., WS24/25, SS25)"
+    )
+    applications_open = models.BooleanField(
+        default=False,
+        help_text="Are new applications currently being accepted?"
+    )
+    # Example of another setting:
+    # site_maintenance_mode = models.BooleanField(default=False, help_text="Is the site in maintenance mode?")
+
+    updated_at = models.DateTimeField(auto_now=True, help_text="Timestamp of the last update to settings.")
+
+    class Meta:
+        verbose_name = "Global App Setting"
+        verbose_name_plural = "Global App Settings"
+        db_table = 't_global_app_settings'
+
+    def __str__(self):
+        return "Global Application Settings"
+
+    def save(self, *args, **kwargs):
+        # Enforce singleton: only allow saving if ID is 1
+        if self.id != 1:
+            logger.warning(f"Attempt to create a new GlobalAppSettings instance with id={self.id} was blocked.")
+            #raise ValidationError("Cannot create new GlobalAppSettings. Only one instance with id=1 is allowed.")
+        super().save(*args, **kwargs)
+        logger.info(f"GlobalAppSettings (id=1) saved at {self.updated_at}.")
+
+    def delete(self, *args, **kwargs):
+        # Prevent deletion of the singleton instance
+        logger.warning(f"Attempt to delete GlobalAppSettings (id=1) was blocked.")
+        #raise ValidationError("Cannot delete the GlobalAppSettings instance.")
+
+    @classmethod
+    def load(cls):
+        """
+        Loads the singleton instance of GlobalAppSettings.
+        If the row doesn't exist (but the table does), it creates it with default values
+        defined in the model fields.
+        This method assumes the table has been created by migrations.
+        """
+        obj, created = cls.objects.get_or_create(pk=1)
+        if created:
+            logger.info("Initialized new GlobalAppSettings singleton instance (id=1) with default values.")
+        return obj
