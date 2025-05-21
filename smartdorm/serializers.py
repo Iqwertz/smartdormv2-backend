@@ -101,3 +101,13 @@ class ParcelSerializer(serializers.ModelSerializer):
         if obj.subtenant:
             return f"{obj.subtenant.name} {obj.subtenant.surname} (Associated Room: {obj.subtenant.room.name or 'N/A'})"
         return None
+
+class TenantForSelectSerializer(serializers.ModelSerializer):
+    label = serializers.SerializerMethodField()
+    class Meta:
+        model = Tenant
+        fields = ['id', 'name', 'surname', 'username', 'current_room', 'label']
+        read_only_fields = fields
+
+    def get_label(self, obj):
+        return f"{obj.name} {obj.surname} ({obj.username or 'N/A'}) - Zimmer: {obj.current_room or 'N/A'}"

@@ -8,10 +8,10 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Tenant, Subtenant, Parcel, Room
-from .serializers import ParcelSerializer, ParcelCreateRequestSerializer
-from .permissions import GroupAndEmployeeTypePermission
-from .email_utils import send_email_message
+from ..models import Tenant, Subtenant, Parcel, Room
+from ..serializers import ParcelSerializer, ParcelCreateRequestSerializer
+from ..permissions import GroupAndEmployeeTypePermission
+from ..utils.email_utils import send_email_message
 
 import logging
 logger = logging.getLogger(__name__)

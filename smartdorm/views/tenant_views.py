@@ -13,15 +13,15 @@ from django.conf import settings
 from django.http import HttpResponseServerError, HttpResponse
 import logging
 from smartdorm.serializers import TenantSerializer, EngagementSerializer, HsvTenantSerializer
-from .models import Engagement
+from ..models import Engagement
 from django.db.models import Prefetch
 from django.utils import timezone  
 from collections import defaultdict
 from django.db.models import F
 
-from .permissions import GroupAndEmployeeTypePermission
-from .models import Tenant, Engagement, GlobalAppSettings
-from .serializers import TenantSerializer, GlobalAppSettingsSerializer
+from ..permissions import GroupAndEmployeeTypePermission
+from ..models import Tenant, Engagement, GlobalAppSettings
+from ..serializers import TenantSerializer, GlobalAppSettingsSerializer
 
 logger = logging.getLogger(__name__)
 
