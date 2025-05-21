@@ -5,12 +5,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
-from django.utils import timezone # Import timezone
+from django.utils import timezone
 
 from .permissions import GroupAndEmployeeTypePermission
 from .models import Tenant
 from .serializers import TenantSerializer
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])

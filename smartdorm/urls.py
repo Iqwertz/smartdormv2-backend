@@ -6,12 +6,19 @@ from . import auth_views
 from . import tenant_views
 from . import department_views
 from . import engagement_views
+from . import parcel_views
 
 # Group auth related URLs under /api/auth/
 auth_urlpatterns = [
     path('login/', auth_views.login_view, name='api-login'),
     path('logout/', auth_views.logout_view, name='api-logout'),
     path('me/', auth_views.me_view, name='api-me'),
+]
+
+parcel_urlpatterns = [
+    path('create/', parcel_views.create_parcel_view, name='api-parcel-create'),
+    path('list/', parcel_views.list_parcels_view, name='api-parcel-list'),
+    path('<str:external_id>/pickup/', parcel_views.pickup_parcel_view, name='api-parcel-pickup'),
 ]
 
 urlpatterns = [
@@ -35,6 +42,7 @@ urlpatterns = [
 
     # Department Specific Views
     path('api/department/tenant-data', department_views.all_tenant_data_view, name='department-tenant-data'), 
+    path('api/department/parcels/', include(parcel_urlpatterns)), 
     
     path('api/auth/', include(auth_urlpatterns)),
 ]

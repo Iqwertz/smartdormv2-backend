@@ -80,6 +80,19 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 NEXTCLOUD_ICS_URL = os.environ.get("NEXTCLOUD_ICS_URL", "https://cloud.schollheim.net/remote.php/dav/public-calendars/8BXCQ5JxXGGQzr2w/?export") #Used to generate a preview to the calendar
 NEXTCLOUD_CALENDAR_URL = os.environ.get("NEXTCLOUD_CALENDAR_URL", "https://cloud.schollheim.net/apps/calendar/p/8BXCQ5JxXGGQzr2w/dayGridMonth/now") # Used to redirect users to the full calendar
 
+# --- Email Configuration ---
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.ionos.de'
+EMAIL_PORT = 465
+EMAIL_USE_SSL = True
+EMAIL_USE_TLS = False 
+
+EMAIL_HOST_USER = 'noreply@schollheim.net'
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = 'SmartDorm <noreply@schollheim.net>'
+EMAIL_SSL_CERTFILE = None
+EMAIL_SSL_KEYFILE = None
+
 # --- Cache (for Sessions) Configuration ---
 CACHES = {
     "default": {
