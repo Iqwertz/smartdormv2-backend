@@ -5,7 +5,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 
 from .permissions import GroupAndEmployeeTypePermission
-from .models import EngagementApplication
+from .models import EngagementApplication, GlobalAppSettings
+from .serializers import GlobalAppSettingsSerializer
+from rest_framework.response import Response
+from rest_framework import status
 
 from io import BytesIO
 from PIL import Image as PILImage
@@ -26,6 +29,9 @@ from reportlab.platypus import (
 
 import re
 from collections import defaultdict
+
+import logging
+logger = logging.getLogger(__name__)
 
 class PDFGenerator:
     """Class to handle PDF generation for engagement applications,
@@ -216,7 +222,8 @@ def generate_applications_pdf(request):
     generate_applications_pdf.required_employee_types = ['TENANT']
     # Fetch applications, prefetch related tenant and department for efficiency
     # Adjust the filter as needed (e.g., specific semester)
-    semester_filter = request.GET.get('semester', 'SS25') # Example: get semester from query param or default
+    settings = GlobalAppSettings.load()
+    semester_filter = request.GET.get('semester', settings.current_semester) # Example: get semester from query param or default
     applications = EngagementApplication.objects.select_related(
         'department', 'tenant'
     ).filter(
@@ -238,3 +245,72 @@ def generate_applications_pdf(request):
     response.write(pdf)
 
     return response
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def set_current_semester_view(request):
+    """
+    API endpoint to set the current_semester.
+    Requires user to be in 'Heimrat' or 'Netzwerkreferat' group.
+    Expects JSON: {"current_semester": "SS2025"}
+    Uses POST method.
+    """
+    set_current_semester_view.required_groups = ['Heimrat', 'Netzwerkreferat']
+    # set_current_semester_view.required_employee_types = []
+
+    new_semester = request.data.get('current_semester')
+    if not new_semester or not isinstance(new_semester, str):
+        return Response(
+            {"error": "Field 'current_semester' is required and must be a string."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        settings = GlobalAppSettings.load()
+        settings.current_semester = new_semester
+        settings.save()
+        serializer = GlobalAppSettingsSerializer(settings)
+        logger.info(f"User '{request.user.username}' updated current_semester to '{new_semester}'.")
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error setting current semester: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while updating the current semester."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST']) 
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def set_applications_open_view(request):
+    """
+    API endpoint to set the applications_open status.
+    Requires user to be in 'Heimrat' or 'Netzwerkreferat' group.
+    Expects JSON: {"applications_open": true}
+    Uses POST method.
+    """
+    set_applications_open_view.required_groups = ['Heimrat', 'Netzwerkreferat']
+    # set_applications_open_view.required_employee_types = []
+
+    applications_open_status = request.data.get('applications_open')
+    if applications_open_status is None or not isinstance(applications_open_status, bool):
+        return Response(
+            {"error": "Field 'applications_open' is required and must be a boolean (true/false)."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        settings = GlobalAppSettings.load()
+        settings.applications_open = applications_open_status
+        settings.save()
+        serializer = GlobalAppSettingsSerializer(settings)
+        logger.info(f"User '{request.user.username}' updated applications_open to '{applications_open_status}'.")
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error setting applications open status: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while updating the applications open status."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department 
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings 
 
 class TenantSerializer(serializers.ModelSerializer):
     class Meta:
@@ -43,3 +43,15 @@ class HsvTenantSerializer(serializers.ModelSerializer):
             'name', 'surname', 'email', 'tel_number', 'current_room', 'current_floor'
         ]
         read_only_fields = fields
+
+class GlobalAppSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GlobalAppSettings
+        fields = ['current_semester', 'applications_open', 'updated_at']
+        read_only_fields = ['updated_at']
+
+    def update(self, instance, validated_data):
+        instance.current_semester = validated_data.get('current_semester', instance.current_semester)
+        instance.applications_open = validated_data.get('applications_open', instance.applications_open)
+        instance.save()
+        return instance

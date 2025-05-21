@@ -38,7 +38,9 @@ echo "Database connection successful."
 # Run Django migrations
 echo "Running Django migrations..."
 python manage.py makemigrations
+python manage.py makemigrations smartdorm
 python manage.py migrate
+python manage.py migrate smartdorm
 
 # Start the Django development server
 echo "Starting Django development server..."
