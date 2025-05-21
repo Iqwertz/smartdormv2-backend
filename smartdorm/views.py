@@ -9,14 +9,19 @@ from smartdorm.models import (
     get_tenants_by_university, 
     get_active_tenants, 
     get_tenant_details, 
-    get_expiring_probations
+    get_expiring_probations,
+    EngagementApplication,
 )
+from .models import Tenant
 from smartdorm.serializers import TenantSerializer
 
 from django.contrib.auth import login, logout
 from django_auth_ldap.backend import LDAPBackend
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.shortcuts import get_object_or_404
+
+
 
 def tenant_dashboard(request):
     # Get all the data
@@ -174,3 +179,6 @@ def me_view(request):
         "is_staff": user.is_staff,
         "last_login": user.last_login.isoformat() if user.last_login else None
     })
+
+
+

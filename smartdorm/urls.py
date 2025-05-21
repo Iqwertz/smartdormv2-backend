@@ -1,5 +1,7 @@
 from django.urls import path, include
 from django.views.generic import TemplateView
+
+from .department_views import generate_applications_pdf
 from .views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
 from . import auth_views 
 from . import tenant_views
@@ -24,6 +26,8 @@ urlpatterns = [
     path('api/tenants/calendar-proxy', tenant_views.calendar_proxy_view, name='calendar-proxy'), # Used to fetch the ICS calendar file from Nextcloud
     path('api/tenants/hsv', tenant_views.hsv_engagement_list_view, name='hsv-engagement-list'),
     path('api/tenants/my-engagements', tenant_views.my_engagements_view, name='my-engagements'),
+
+    path('api/applications/pdf/', generate_applications_pdf, name='applications-pdf'),
 
     # Department Specific Views
     path('api/department/tenant-data', department_views.all_tenant_data_view, name='department-tenant-data'), 
