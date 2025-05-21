@@ -4,9 +4,9 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 
-from .permissions import GroupAndEmployeeTypePermission
-from .models import EngagementApplication, GlobalAppSettings
-from .serializers import GlobalAppSettingsSerializer
+from ..permissions import GroupAndEmployeeTypePermission
+from ..models import EngagementApplication, GlobalAppSettings
+from ..serializers import GlobalAppSettingsSerializer
 from rest_framework.response import Response
 from rest_framework import status
 

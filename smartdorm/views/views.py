@@ -12,7 +12,7 @@ from smartdorm.models import (
     get_expiring_probations,
     EngagementApplication,
 )
-from .models import Tenant
+from ..models import Tenant
 from smartdorm.serializers import TenantSerializer
 
 from django.contrib.auth import login, logout
