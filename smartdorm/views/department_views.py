@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant
-from ..serializers import TenantSerializer
+from ..serializers import TenantSerializer, EngagementSerializer
 
 import logging
 

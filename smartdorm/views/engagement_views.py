@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 
+from ..utils.helper import checkValidSemesterFormat
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import EngagementApplication, GlobalAppSettings
 from ..serializers import GlobalAppSettingsSerializer
@@ -261,9 +262,10 @@ def set_current_semester_view(request):
     # set_current_semester_view.required_employee_types = []
 
     new_semester = request.data.get('current_semester')
-    if not new_semester or not isinstance(new_semester, str):
+    
+    if not new_semester or not isinstance(new_semester, str) or not helper.checkValidSemesterFormat(new_semester):
         return Response(
-            {"error": "Field 'current_semester' is required and must be a string."},
+            {"error": "Field 'current_semester' is required and must be a string in the format SSYY or WSYY/YY."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -314,3 +316,4 @@ def set_applications_open_view(request):
             {"error": "An error occurred while updating the applications open status."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+        
