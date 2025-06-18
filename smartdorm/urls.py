@@ -39,6 +39,7 @@ engagement_urlpatterns = [
     path('heimrat/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'),
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
+    path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
 ]
 
 # Department-related URLs

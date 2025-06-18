@@ -1,18 +1,21 @@
 #In this file we have all views that are in some way restricted to a engagement role
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 
 from ..utils.helper import checkValidSemesterFormat
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import EngagementApplication, GlobalAppSettings
+from ..models import EngagementApplication, GlobalAppSettings, Engagement
 from ..serializers import GlobalAppSettingsSerializer
 from rest_framework.response import Response
 from rest_framework import status
 
 from io import BytesIO
 from PIL import Image as PILImage
+
+import csv
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -317,3 +320,53 @@ def set_applications_open_view(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def export_engagement_tenants_csv(request):
+    """
+    API endpoint to export a CSV file of all current tenants who are part of an engagement.
+    The list is sorted by department name, then by tenant name.
+    This endpoint was implemented for the patches so Bene can write everyone that wants a badge for a department he did in the past. So this function is more of a onetime use and not implemented in the frontend. But it is kept in case we need it sometime in the future.
+    """
+    export_engagement_tenants_csv.required_groups = ['Netzwerkreferat', 'ADMIN']
+    export_engagement_tenants_csv.required_employee_types = ['TENANT']
+
+    today = timezone.now().date()
+
+    # Query for engagements of current tenants, prefetching related objects for efficiency
+    engagements = Engagement.objects.select_related(
+        'tenant', 'department'
+    ).filter(
+        tenant__move_in__lte=today,
+        tenant__move_out__gte=today
+    ).order_by(
+        'department__name', 'tenant__surname', 'tenant__name'
+    )
+
+    if not engagements.exists():
+        return HttpResponse("No current tenants with engagements were found.", status=404)
+
+    # Create the HttpResponse object with the appropriate CSV header.
+    response = HttpResponse(
+        content_type='text/csv',
+        headers={'Content-Disposition': 'attachment; filename="current_engagement_tenants.csv"'},
+    )
+    response.write(u'\ufeff'.encode('utf8'))  # BOM for Excel UTF-8 compatibility
+
+    writer = csv.writer(response)
+    # Write the header row
+    writer.writerow(['Department', 'Semester', 'Tenant Name', 'Tenant Surname', 'Email', 'Room'])
+
+    # Write data rows
+    for engagement in engagements:
+        writer.writerow([
+            engagement.department.name if engagement.department else 'N/A',
+            engagement.semester,
+            engagement.tenant.name,
+            engagement.tenant.surname,
+            engagement.tenant.email,
+            engagement.tenant.current_room or 'N/A'
+        ])
+
+    return response
