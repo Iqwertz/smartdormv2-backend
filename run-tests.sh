@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# Smart Dorm Backend Test Script
+
+# Set default test type if not provided
+TEST_TYPE="${TEST_TYPE:-all}"
 
 # Load environment variables from .env file
 if [ -f .env ]; then
@@ -10,10 +12,13 @@ else
   exit 1
 fi
 
-# Export environment variables for Django
 export DB_PASSWORD
 export PGPASSWORD="${DB_PASSWORD}"
 
-# Run the tests
-echo "Running Django tests..."
-python manage.py test smartdorm.tests.integration.test_api 
+if [ "$TEST_TYPE" = "unit" ]; then
+  echo "Running Django unit tests only..."
+  python manage.py test smartdorm.tests.unit
+else
+  echo "Running all Django tests..."
+  python manage.py test smartdorm.tests
+fi 
