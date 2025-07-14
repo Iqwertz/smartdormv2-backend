@@ -112,7 +112,7 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True # Important for cookies/sessions
 
 # --- LDAP Configuration ---
-AUTH_LDAP_SERVER_URI = "ldap://ldap.schollheim.net:389"
+AUTH_LDAP_SERVER_URI = os.environ.get("LDAP_URI")
 AUTH_LDAP_BIND_DN = "cn=admin,dc=schollheim,dc=net"
 AUTH_LDAP_BIND_PASSWORD = os.environ.get("LDAP_ADMIN_PASSWORD")
 # User search configuration
