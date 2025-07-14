@@ -1,3 +1,5 @@
+import secrets
+import string
 
 
 def checkValidSemesterFormat(semester: str) -> bool:
@@ -17,3 +19,10 @@ def checkValidSemesterFormat(semester: str) -> bool:
         if first_year + 1 == second_year:
             return True
     return False
+
+def generate_secure_password(length=12):
+    """Generates a secure, random password."""
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    # Ensure the password is complex enough, but for now, random choice is sufficient.
+    password = ''.join(secrets.choice(alphabet) for i in range(length))
+    return password

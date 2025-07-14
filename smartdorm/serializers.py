@@ -14,6 +14,21 @@ class TenantSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id']  # ID is auto-generated
 
+class NewTenantSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    surname = serializers.CharField(max_length=255)
+    email = serializers.EmailField()
+    gender = serializers.CharField(max_length=255)
+    nationality = serializers.CharField(max_length=255)
+    birthday = serializers.DateField()
+    tel_number = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    move_in = serializers.DateField()
+    current_room = serializers.CharField(max_length=255)
+    deposit = serializers.DecimalField(max_digits=19, decimal_places=2, min_value=0)
+    university = serializers.CharField(max_length=255)
+    study_field = serializers.CharField(max_length=255)
+    note = serializers.CharField(required=False, allow_blank=True)
+
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
