@@ -64,3 +64,32 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
+            
+def delete_ldap_user(username):
+    """
+    Deletes a user from the LDAP directory.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        con.delete_s(user_dn)
+        logger.info(f"Successfully deleted LDAP user: {user_dn}")
+        return True
+
+    except ldap.NO_SUCH_OBJECT:
+        logger.warning(f"Attempted to delete LDAP user '{username}', but they do not exist.")
+        return True # The end goal is for the user to not exist, so this is a success state.
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during deletion for '{username}': {e}")
+        raise ConnectionError(f"Could not delete user from the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()

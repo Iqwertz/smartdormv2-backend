@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant
 from django.utils import timezone
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -28,6 +28,11 @@ class NewTenantSerializer(serializers.Serializer):
     university = serializers.CharField(max_length=255)
     study_field = serializers.CharField(max_length=255)
     note = serializers.CharField(required=False, allow_blank=True)
+
+class SubtenantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subtenant
+        fields = '__all__'
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:

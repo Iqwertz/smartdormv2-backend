@@ -9,10 +9,12 @@ from django.db import transaction
 from django.db.models import Max
 from datetime import timedelta
 import uuid
+from django.shortcuts import get_object_or_404
+
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant
-from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer
+from ..models import Tenant, Subtenant
+from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -21,6 +23,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+VERWALTUNG_ADMIN_GROUPS = ['VERWALTUNG', 'ADMIN']
+DEPARTMENT_EMPLOYEE_TYPE = ['DEPARTMENT']
+
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -28,8 +33,8 @@ def all_tenant_data_view(request):
     """
     API endpoint to retrieve tenant data, filterable by status (past, current, future).
     """
-    #all_tenant_data_view.required_groups = ['Verwaltung']
-    all_tenant_data_view.required_employee_types = ['DEPARTMENT']
+    all_tenant_data_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    all_tenant_data_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
     # --- Filtering Logic ---
     status_filter = request.GET.get('status', 'current').lower()
     today = timezone.now().date()
@@ -68,6 +73,78 @@ def all_tenant_data_view(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def get_tenant_detail_view(request, tenant_id):
+    get_tenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    get_tenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    serializer = TenantSerializer(tenant)
+    return Response(serializer.data)
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def update_tenant_view(request, tenant_id):
+    update_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    update_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    # Exclude non-editable fields from the request data before validation
+    request.data.pop('current_room', None)
+    request.data.pop('move_in', None)
+    
+    serializer = TenantSerializer(tenant, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def delete_tenant_view(request, tenant_id):
+    delete_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    delete_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    username_to_delete = tenant.username
+
+    if not username_to_delete:
+        # If there is no username, we can just delete the DB entry.
+        tenant.delete()
+        return Response({"message": "Tenant DB record deleted (no associated username)."}, status=status.HTTP_204_NO_CONTENT)
+
+    # Proceed with LDAP and DB deletion
+    try:
+        ldap_utils.delete_ldap_user(username_to_delete)
+        tenant.delete()
+        logger.info(f"Successfully deleted tenant '{username_to_delete}' from DB and LDAP.")
+        return Response({"message": f"Tenant '{username_to_delete}' was successfully deleted."}, status=status.HTTP_204_NO_CONTENT)
+    except ConnectionError as e:
+        logger.error(f"Failed to delete tenant '{username_to_delete}': {e}", exc_info=True)
+        # The transaction will be rolled back, so the DB entry is not deleted if LDAP fails.
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while deleting tenant '{username_to_delete}': {e}", exc_info=True)
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_subtenants_for_tenant_view(request, tenant_id):
+    list_subtenants_for_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_subtenants_for_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    subtenants = Subtenant.objects.filter(tenant_id=tenant_id).order_by('-move_id')
+    serializer = SubtenantSerializer(subtenants, many=True)
+    return Response(serializer.data)
+
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -76,8 +153,8 @@ def create_new_tenant_view(request):
     """
     Handles the creation of a new tenant, including LDAP account and email notification.
     """
-    create_new_tenant_view.required_groups = ['VERWALTUNG', 'ADMIN']
-    create_new_tenant_view.required_employee_types = ['DEPARTMENT']
+    get_tenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    get_tenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     serializer = NewTenantSerializer(data=request.data)
     if not serializer.is_valid():

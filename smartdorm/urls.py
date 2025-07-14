@@ -45,6 +45,10 @@ engagement_urlpatterns = [
 # Department-related URLs
 department_urlpatterns = [
     path('tenant-data/', department_views.all_tenant_data_view, name='department-tenant-data'),
+    path('tenant-data/<int:tenant_id>/', department_views.get_tenant_detail_view, name='department-get-tenant'),
+    path('tenant-data/<int:tenant_id>/update/', department_views.update_tenant_view, name='department-update-tenant'),
+    path('tenant-data/<int:tenant_id>/delete/', department_views.delete_tenant_view, name='department-delete-tenant'),
+    path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
     path('create-new-tenant/', department_views.create_new_tenant_view, name='department-create-new-tenant'),
     path('parcels/', include(parcel_urlpatterns)),
 ]
