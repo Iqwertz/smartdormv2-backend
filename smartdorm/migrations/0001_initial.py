@@ -159,7 +159,7 @@ class Migration(migrations.Migration):
                 ('id', models.IntegerField(primary_key=True, serialize=False)),
                 ('created_on', models.DateField()),
                 ('external_id', models.CharField(max_length=255)),
-                ('move_id', models.DateField()),
+                ('move_in', models.DateField()),
                 ('move_out', models.DateField()),
                 ('university_confirmation', models.BooleanField()),
                 ('name', models.CharField(max_length=255)),
