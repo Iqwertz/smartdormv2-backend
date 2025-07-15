@@ -7,14 +7,14 @@ from rest_framework import status
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Max
-from datetime import timedelta
+from datetime import timedelta, date
 import uuid
 from django.shortcuts import get_object_or_404
 
 
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant
-from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer
+from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -141,7 +141,7 @@ def list_subtenants_for_tenant_view(request, tenant_id):
     list_subtenants_for_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     list_subtenants_for_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
-    subtenants = Subtenant.objects.filter(tenant_id=tenant_id).order_by('-move_id')
+    subtenants = Subtenant.objects.filter(tenant_id=tenant_id).order_by('-move_in')
     serializer = SubtenantSerializer(subtenants, many=True)
     return Response(serializer.data)
 
@@ -245,3 +245,138 @@ def create_new_tenant_view(request):
         {"message": f"Tenant '{username}' created successfully and notification sent.", "username": username},
         status=status.HTTP_201_CREATED
     )
+    
+    
+# --- Subtenant Views ---
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def create_subtenant_view(request):
+    create_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    create_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    serializer = NewSubtenantSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    data = serializer.validated_data
+    
+    base_username = (data['name'][0] + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
+    username = base_username
+    counter = 1
+    while Tenant.objects.filter(username=username).exists():
+        username = f"{base_username}{counter}"
+        counter += 1
+    password = generate_secure_password()
+    
+    try:
+        ldap_utils.create_ldap_user(
+            username=username, password=password, first_name=data['name'],
+            last_name=data['surname'], email=data['email'],
+            group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS
+        )
+    except (ValueError, ConnectionError) as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        max_id_result = Subtenant.objects.aggregate(max_id=Max('id'))
+        new_id = (max_id_result['max_id'] or 0) + 1
+
+        subtenant = Subtenant.objects.create(
+            id=new_id, external_id=uuid.uuid4().hex, created_on=date.today(),
+            name=data['name'], surname=data['surname'],
+            email=data['email'], move_in=data['move_in'], move_out=data['move_out'],
+            tenant_id=data['tenant_id'], room_id=data['room_id'],
+            university_confirmation=data['university_confirmation']
+        )
+    except Exception as e:
+        logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
+        return Response({"error": "Failed to save subtenant to database after creating auth entry."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    email_context = {
+        'greeting': f"Hallo {data['name']}",
+        'username': username, 'password': password,
+    }
+    email_sent = email_utils.send_email_message(
+        recipient_list=[data['email']], subject="Dein SmartDorm Zugang als Untermieter",
+        html_template_name='email/user-account-creation-subtenant.html',
+        context=email_context
+    )
+    if not email_sent:
+        logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+
+    return Response(SubtenantSerializer(subtenant).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_all_subtenants_view(request):
+    list_all_subtenants_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_all_subtenants_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    today = timezone.now().date()
+    subtenants = Subtenant.objects.filter(
+        move_in__lte=today, move_out__gte=today
+    ).select_related('tenant', 'room').order_by('surname', 'name')
+    
+    serializer = SubtenantSerializer(subtenants, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def get_subtenant_detail_view(request, subtenant_id):
+    get_subtenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    get_subtenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    subtenant = get_object_or_404(Subtenant, id=subtenant_id)
+    serializer = SubtenantSerializer(subtenant)
+    return Response(serializer.data)
+
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def update_subtenant_view(request, subtenant_id):
+    update_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    update_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    subtenant = get_object_or_404(Subtenant, id=subtenant_id)
+    # Use NewSubtenantSerializer to validate the subset of editable fields
+    serializer = NewSubtenantSerializer(data=request.data, partial=True)
+    if serializer.is_valid():
+        data = serializer.validated_data
+        for key, value in data.items():
+            setattr(subtenant, key, value)
+        subtenant.save()
+        return Response(SubtenantSerializer(subtenant).data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def delete_subtenant_view(request, subtenant_id):
+    delete_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    delete_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    subtenant = get_object_or_404(Subtenant, id=subtenant_id)
+    #Reconstruct the username to delete, not the cleanest way since it assumes that the username isnt incremented when creating subtenants, however with the low amount of subtenants it is very unlikely to happen.
+    username_to_delete = (subtenant.name[0] + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
+                                                                                                                                                        )
+    if not username_to_delete:
+        subtenant.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    try:
+        ldap_utils.delete_ldap_user(username_to_delete)
+        subtenant.delete()
+        logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    except ConnectionError as e:
+        logger.error(f"Failed to delete subtenant '{username_to_delete}': {e}", exc_info=True)
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

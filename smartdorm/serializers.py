@@ -30,9 +30,38 @@ class NewTenantSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
 
 class SubtenantSerializer(serializers.ModelSerializer):
+    # To display tenant info nicely in GET responses
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    room_name = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = Subtenant
         fields = '__all__'
+
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return f"{obj.tenant.name} {obj.tenant.surname}"
+        return None
+
+    def get_room_name(self, obj):
+        if obj.room:
+            return obj.room.name
+        return None
+
+class NewSubtenantSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    surname = serializers.CharField(max_length=255)
+    email = serializers.EmailField()
+    move_in = serializers.DateField()
+    move_out = serializers.DateField()
+    tenant_id = serializers.IntegerField()
+    room_id = serializers.IntegerField()
+    university_confirmation = serializers.BooleanField()
+
+    def validate(self, data):
+        if data['move_in'] >= data['move_out']:
+            raise serializers.ValidationError("Das Auszugsdatum muss nach dem Einzugsdatum liegen.")
+        return data
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:

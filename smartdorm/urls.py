@@ -43,13 +43,24 @@ engagement_urlpatterns = [
 ]
 
 # Department-related URLs
+subtenant_urlpatterns = [
+    path('list/', department_views.list_all_subtenants_view, name='subtenant-list-all'),
+    path('create/', department_views.create_subtenant_view, name='subtenant-create'),
+    path('<int:subtenant_id>/', department_views.get_subtenant_detail_view, name='subtenant-detail'),
+    path('<int:subtenant_id>/update/', department_views.update_subtenant_view, name='subtenant-update'),
+    path('<int:subtenant_id>/delete/', department_views.delete_subtenant_view, name='subtenant-delete'),
+]
+
 department_urlpatterns = [
+    # Tenant management
     path('tenant-data/', department_views.all_tenant_data_view, name='department-tenant-data'),
     path('tenant-data/<int:tenant_id>/', department_views.get_tenant_detail_view, name='department-get-tenant'),
     path('tenant-data/<int:tenant_id>/update/', department_views.update_tenant_view, name='department-update-tenant'),
     path('tenant-data/<int:tenant_id>/delete/', department_views.delete_tenant_view, name='department-delete-tenant'),
     path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
     path('create-new-tenant/', department_views.create_new_tenant_view, name='department-create-new-tenant'),
+    # Subtenant management
+    path('subtenants/', include(subtenant_urlpatterns)),
     path('parcels/', include(parcel_urlpatterns)),
 ]
 
@@ -62,6 +73,7 @@ admin_urlpatterns = [
 # Shared/common URLs
 common_urlpatterns = [
     path('tenant-list/', shared_views.tenants_for_select_view, name='department-tenants-for-select'),
+    path('room-list/', shared_views.rooms_for_select_view, name='common-rooms-for-select'),
 ]
 
 urlpatterns = [

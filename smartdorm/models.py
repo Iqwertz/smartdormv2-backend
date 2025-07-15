@@ -164,7 +164,7 @@ class Subtenant(models.Model):
     id = models.IntegerField(primary_key=True)
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    move_id = models.DateField()
+    move_in = models.DateField(db_column='move_id') # Note: 'move_id' is a typo in the original db, should have been 'move_in' but is kept for compatibility
     move_out = models.DateField()
     university_confirmation = models.BooleanField()
     room = models.ForeignKey(Room, on_delete=models.DO_NOTHING, db_column='room_id')

@@ -6,7 +6,7 @@ from rest_framework import status
 from django.utils import timezone
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant
+from ..models import Tenant, Subtenant, Room
 
 import logging
 
@@ -40,7 +40,7 @@ def tenants_for_select_view(request):
             ).order_by('surname', 'name')
             for tenant in current_tenants:
                 recipients_list.append({
-                    'id': f't_{tenant.id}',
+                    'id': tenant.id,
                     'name': tenant.name,
                     'surname': tenant.surname,
                     'username': tenant.username,
@@ -51,7 +51,7 @@ def tenants_for_select_view(request):
 
         if include_filter in ['subtenants', 'all']:
             current_subtenants = Subtenant.objects.filter(
-                move_id__lte=today,
+                move_in__lte=today,
                 move_out__gte=today
             ).select_related('room').order_by('surname', 'name')
             for subtenant in current_subtenants:
@@ -78,3 +78,22 @@ def tenants_for_select_view(request):
              status=status.HTTP_500_INTERNAL_SERVER_ERROR
          )
 
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def rooms_for_select_view(request):
+    """
+    API endpoint to retrieve a list of all rooms for select dropdowns.
+    """
+    try:
+        rooms = Room.objects.all().order_by('name')
+        room_list = [
+            {'id': room.id, 'label': room.name} for room in rooms
+        ]
+        return Response(room_list, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error retrieving rooms for select: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while retrieving room list."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

@@ -51,7 +51,7 @@ def find_current_subtenants_by_name(name, surname):
     return Subtenant.objects.filter(
         name__iexact=name,
         surname__iexact=surname,
-        move_id__lte=today,
+        move_in__lte=today,
         move_out__gte=today
     )
 
