@@ -35,6 +35,11 @@ if ! psql -h "${DB_HOST}" -U "${POSTGRES_USER}" -p "${DB_PORT}" -d "${POSTGRES_D
 fi
 echo "Database connection successful."
 
+echo "Creating logs folder if it does not exist..."
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
+
 # Run Django migrations
 echo "Running Django migrations..."
 python manage.py makemigrations

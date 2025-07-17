@@ -163,7 +163,7 @@ def create_new_tenant_view(request):
     data = serializer.validated_data
 
     # 1. Generate unique username and a secure password
-    base_username = (data['name'][0] + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
+    base_username = (data['name'][0] + "." + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
     username = base_username
     counter = 1
     while Tenant.objects.filter(username=username).exists():
@@ -263,12 +263,18 @@ def create_subtenant_view(request):
 
     data = serializer.validated_data
     
-    base_username = (data['name'][0] + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
+    base_username = (data['name'][0] + "." + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
     username = base_username
     counter = 1
+    #Log all Tenants with the same username, so we can increment it if needed
+    logger.info(f"Creating subtenant with base username: {base_username}")
+    
     while Tenant.objects.filter(username=username).exists():
+        logger.info(f"Username {username} already exists, trying next increment.")
         username = f"{base_username}{counter}"
         counter += 1
+        
+    
     password = generate_secure_password()
     
     try:
@@ -366,7 +372,7 @@ def delete_subtenant_view(request, subtenant_id):
     
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     #Reconstruct the username to delete, not the cleanest way since it assumes that the username isnt incremented when creating subtenants, however with the low amount of subtenants it is very unlikely to happen.
-    username_to_delete = (subtenant.name[0] + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
+    username_to_delete = (subtenant.name[0] + "." + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
                                                                                                                                                         )
     if not username_to_delete:
         subtenant.delete()

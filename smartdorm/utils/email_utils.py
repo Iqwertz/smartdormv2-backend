@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 ATTACHMENTS_BASE_DIR = os.path.join(settings.BASE_DIR, 'smartdorm', 'static')
 
+PRODUCTION = os.environ.get('PRODUCTION', 'False').lower() in ['true', '1', 'yes']
+DEVELOPER_EMAIL = os.environ.get('DEVELOPER_EMAIL')
 
 def send_email_message(
     recipient_list,
@@ -52,6 +54,16 @@ def send_email_message(
             text_content = render_to_string(text_template_name, context)
         else:
             text_content = strip_tags(html_content) # Fallback: strip tags from HTML
+
+        # If in development mode, redirect all emails to the developer's email
+        if not PRODUCTION:
+            if DEVELOPER_EMAIL:
+                recipient_list = [DEVELOPER_EMAIL]
+                logger.info(f"Development mode: redirecting email that should go to {recipient_list} to developer email {DEVELOPER_EMAIL}")
+            else:
+                logger.error("DEVELOPER_EMAIL environment variable is not set. Cannot redirect email in development mode.")
+                logger.error("Not sending email as no developer email is configured.")
+                return False
 
         # Create the email message
         email = EmailMultiAlternatives(
