@@ -263,7 +263,7 @@ def create_subtenant_view(request):
 
     data = serializer.validated_data
     
-    base_username = (data['name'][0] + "." + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
+    base_username = (data['name'] + " " + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss') # subtenant username format is diffrent from tenant to avoid conflicts
     username = base_username
     counter = 1
     #Log all Tenants with the same username, so we can increment it if needed
@@ -372,7 +372,7 @@ def delete_subtenant_view(request, subtenant_id):
     
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     #Reconstruct the username to delete, not the cleanest way since it assumes that the username isnt incremented when creating subtenants, however with the low amount of subtenants it is very unlikely to happen.
-    username_to_delete = (subtenant.name[0] + "." + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
+    username_to_delete = (subtenant.name + " " + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
                                                                                                                                                         )
     if not username_to_delete:
         subtenant.delete()
