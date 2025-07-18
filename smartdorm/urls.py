@@ -44,7 +44,7 @@ engagement_urlpatterns = [
 
 # Department-related URLs
 subtenant_urlpatterns = [
-    path('list/', department_views.list_all_subtenants_view, name='subtenant-list-all'),
+    path('list/', department_views.list_subtenants_view, name='subtenant-list-all'),
     path('create/', department_views.create_subtenant_view, name='subtenant-create'),
     path('<int:subtenant_id>/', department_views.get_subtenant_detail_view, name='subtenant-detail'),
     path('<int:subtenant_id>/update/', department_views.update_subtenant_view, name='subtenant-update'),
@@ -58,6 +58,8 @@ department_urlpatterns = [
     path('tenant-data/<int:tenant_id>/update/', department_views.update_tenant_view, name='department-update-tenant'),
     path('tenant-data/<int:tenant_id>/delete/', department_views.delete_tenant_view, name='department-delete-tenant'),
     path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
+    path('tenant-data/<int:tenant_id>/rentals/', department_views.list_tenant_rentals_view, name='department-list-rentals'),
+    path('tenant-data/<int:tenant_id>/move/', department_views.move_tenant_view, name='department-move-tenant'),
     path('create-new-tenant/', department_views.create_new_tenant_view, name='department-create-new-tenant'),
     # Subtenant management
     path('subtenants/', include(subtenant_urlpatterns)),

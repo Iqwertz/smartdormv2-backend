@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room
 from django.utils import timezone
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -62,6 +62,22 @@ class NewSubtenantSerializer(serializers.Serializer):
         if data['move_in'] >= data['move_out']:
             raise serializers.ValidationError("Das Auszugsdatum muss nach dem Einzugsdatum liegen.")
         return data
+
+class RentalSerializer(serializers.ModelSerializer):
+    room_name = serializers.CharField(source='room.name', read_only=True)
+
+    class Meta:
+        model = Rental
+        fields = ['id', 'move_in', 'moved_out', 'room_name']
+
+class TenantMoveSerializer(serializers.Serializer):
+    room_id = serializers.IntegerField()
+    move_date = serializers.DateField()
+
+    def validate_room_id(self, value):
+        if not Room.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Room does not exist.")
+        return value
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:

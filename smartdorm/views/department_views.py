@@ -13,8 +13,8 @@ from django.shortcuts import get_object_or_404
 
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant
-from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer
+from ..models import Tenant, Subtenant, Rental, Room
+from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -144,6 +144,68 @@ def list_subtenants_for_tenant_view(request, tenant_id):
     subtenants = Subtenant.objects.filter(tenant_id=tenant_id).order_by('-move_in')
     serializer = SubtenantSerializer(subtenants, many=True)
     return Response(serializer.data)
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_tenant_rentals_view(request, tenant_id):
+    list_tenant_rentals_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_tenant_rentals_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    rentals = Rental.objects.filter(tenant_id=tenant_id).select_related('room').order_by('-move_in')
+    serializer = RentalSerializer(rentals, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def move_tenant_view(request, tenant_id):
+    move_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    move_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    serializer = TenantMoveSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    data = serializer.validated_data
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    new_room = get_object_or_404(Room, id=data['room_id'])
+    move_date = data['move_date']
+
+    # Find the current rental agreement to end it
+    current_rental = Rental.objects.filter(tenant=tenant).order_by('-move_in').first()
+    if not current_rental:
+        return Response({"error": "No current rental found for this tenant."}, status=status.HTTP_404_NOT_FOUND)
+
+    if move_date <= current_rental.move_in:
+        return Response({"error": "Move date must be after the current move-in date."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    # End the current rental one day before the new move
+    current_rental.moved_out = move_date - timedelta(days=1)
+    current_rental.save()
+
+    # Create a new rental record for the new room
+    max_id_result = Rental.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+    
+    Rental.objects.create(
+        id=new_id,
+        external_id=uuid.uuid4().hex,
+        tenant=tenant,
+        room=new_room,
+        move_in=move_date,
+        moved_out=tenant.move_out  # Assume the contract end date remains the same
+    )
+
+    # Update the denormalized fields on the tenant model
+    tenant.current_room = new_room.name
+    tenant.current_floor = new_room.floor
+    tenant.save()
+    
+    logger.info(f"Tenant {tenant.username} moved from room {current_rental.room.name} to {new_room.name} on {move_date}.")
+
+    return Response(TenantSerializer(tenant).data, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
@@ -319,18 +381,35 @@ def create_subtenant_view(request):
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
-def list_all_subtenants_view(request):
-    list_all_subtenants_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_all_subtenants_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+def list_subtenants_view(request):
+    list_subtenants_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_subtenants_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
     
+    status_filter = request.GET.get('status', 'current').lower()
     today = timezone.now().date()
-    subtenants = Subtenant.objects.filter(
-        move_in__lte=today, move_out__gte=today
-    ).select_related('tenant', 'room').order_by('surname', 'name')
     
-    serializer = SubtenantSerializer(subtenants, many=True)
-    return Response(serializer.data)
+    subtenants = Subtenant.objects.all()
 
+    if status_filter == 'current':
+        subtenants = subtenants.filter(
+            move_in__lte=today,
+            move_out__gte=today
+        )
+    elif status_filter == 'future':
+        subtenants = subtenants.filter(
+            move_in__gt=today
+        )
+    elif status_filter != 'all':
+        # Default to current if status is invalid
+        subtenants = subtenants.filter(
+            move_in__lte=today,
+            move_out__gte=today
+        )
+
+    ordered_subtenants = subtenants.select_related('tenant', 'room').order_by('-move_in', 'surname', 'name')
+    
+    serializer = SubtenantSerializer(ordered_subtenants, many=True)
+    return Response(serializer.data)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
