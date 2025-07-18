@@ -12,5 +12,5 @@ DEFAULT_TENANT_LDAP_GROUPS = [
 
 # List of DNs for groups to which new subtenants are automatically added.
 DEFAULT_SUBTENANT_LDAP_GROUPS = [
-    'cn=tenant,ou=roles,dc=schollheim,dc=net', # Just for testing
+    'cn=wlan,ou=groups,dc=schollheim,dc=net',
 ]
