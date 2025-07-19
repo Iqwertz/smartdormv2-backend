@@ -128,7 +128,7 @@ class Departure(models.Model):
     tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    status = models.CharField(max_length=255)
+    status = models.CharField(max_length=255) #'POSTPONED', 'CREATED', 'CLOSED', 'CONFIRMED', POSTPONED is not implemented yet
 
     class Meta:
         db_table = 't_departure'
@@ -136,11 +136,11 @@ class Departure(models.Model):
 
 class DepartmentSignature(models.Model):
     id = models.IntegerField(primary_key=True)
-    amount = models.DecimalField(max_digits=19, decimal_places=2)
+    amount = models.DecimalField(max_digits=19, decimal_places=2, default=0.00)
     department_name = models.CharField(max_length=30)
     external_id = models.CharField(max_length=255)
-    signed_on = models.DateField()
-    departure = models.ForeignKey(Departure, on_delete=models.DO_NOTHING, db_column='departure_id')
+    signed_on = models.DateField(null=True, blank=True)
+    departure = models.ForeignKey(Departure, on_delete=models.DO_NOTHING, db_column='departure_id', related_name='signatures')
 
     class Meta:
         db_table = 't_department_signature'

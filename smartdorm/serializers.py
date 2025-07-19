@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature
 from django.utils import timezone
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -166,3 +166,24 @@ class ParcelSerializer(serializers.ModelSerializer):
         if obj.subtenant:
             return f"{obj.subtenant.name} {obj.subtenant.surname} (Associated Room: {obj.subtenant.room.name or 'N/A'})"
         return None
+
+class DepartmentSignatureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DepartmentSignature
+        fields = ['id', 'department_name', 'amount', 'signed_on', 'external_id']
+
+class DepartureSerializer(serializers.ModelSerializer):
+    tenant = TenantSerializer(read_only=True)
+    signatures = DepartmentSignatureSerializer(many=True, read_only=True)
+    is_fully_signed = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Departure
+        fields = ['tenant', 'created_on', 'status', 'signatures', 'is_fully_signed']
+
+    def get_is_fully_signed(self, obj):
+        # Checks if all signatures linked to the departure have a 'signed_on' date.
+        return all(sig.signed_on is not None for sig in obj.signatures.all())
+
+class SignSignatureSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=19, decimal_places=2, min_value=0.00)

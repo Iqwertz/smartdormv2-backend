@@ -42,13 +42,23 @@ engagement_urlpatterns = [
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
 ]
 
-# Department-related URLs
+# Subtenant-related URLs
 subtenant_urlpatterns = [
     path('list/', department_views.list_subtenants_view, name='subtenant-list-all'),
     path('create/', department_views.create_subtenant_view, name='subtenant-create'),
     path('<int:subtenant_id>/', department_views.get_subtenant_detail_view, name='subtenant-detail'),
     path('<int:subtenant_id>/update/', department_views.update_subtenant_view, name='subtenant-update'),
     path('<int:subtenant_id>/delete/', department_views.delete_subtenant_view, name='subtenant-delete'),
+]
+
+# Departure-related URLs
+departure_urlpatterns = [
+    path('candidates/', department_views.list_departure_candidates_view, name='departure-candidates'),
+    path('create/', department_views.create_departure_view, name='departure-create'),
+    path('list/', department_views.list_departures_view, name='departure-list'),
+    path('for-signing/', department_views.list_departures_for_signing_view, name='departure-for-signing'),
+    path('<int:tenant_id>/close/', department_views.close_departure_view, name='departure-close'),
+    path('signatures/<int:signature_id>/sign/', department_views.sign_departure_signature_view, name='departure-sign'),
 ]
 
 department_urlpatterns = [
@@ -64,6 +74,8 @@ department_urlpatterns = [
     # Subtenant management
     path('subtenants/', include(subtenant_urlpatterns)),
     path('parcels/', include(parcel_urlpatterns)),
+    # Departure management
+    path('departures/', include((departure_urlpatterns, 'departures'))),
 ]
 
 # Admin-related URLs

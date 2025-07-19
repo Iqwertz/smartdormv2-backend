@@ -13,8 +13,12 @@ from django.shortcuts import get_object_or_404
 
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room
-from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer
+from ..models import Tenant, Subtenant, Rental, Room, Departure, DepartmentSignature
+from ..serializers import (
+    TenantSerializer, EngagementSerializer, NewTenantSerializer, 
+    SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, 
+    TenantMoveSerializer, DepartureSerializer, SignSignatureSerializer, DepartmentSignatureSerializer
+)
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -465,3 +469,131 @@ def delete_subtenant_view(request, subtenant_id):
     except ConnectionError as e:
         logger.error(f"Failed to delete subtenant '{username_to_delete}': {e}", exc_info=True)
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# --- Departure Views ---
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departure_candidates_view(request):
+    list_departure_candidates_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_departure_candidates_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    today = timezone.now().date()
+    threshold_date = today + timedelta(days=app_config.DEPARTURE_CANDIDATE_TIMEFRAME_DAYS)
+    existing_departure_tenant_ids = Departure.objects.values_list('tenant_id', flat=True)
+    candidates = Tenant.objects.filter(
+        move_out__gte=today,
+        move_out__lte=threshold_date
+    ).exclude(
+        id__in=existing_departure_tenant_ids
+    ).order_by('move_out')
+    serializer = TenantSerializer(candidates, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def create_departure_view(request):
+    create_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    create_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    tenant_id = request.data.get('tenant_id')
+    if not tenant_id:
+        return Response({"error": "tenant_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    if Departure.objects.filter(tenant=tenant).exists():
+        return Response({"error": "Departure record already exists for this tenant."}, status=status.HTTP_400_BAD_REQUEST)
+
+    departure = Departure.objects.create(
+        tenant=tenant,
+        created_on=timezone.now().date(),
+        external_id=uuid.uuid4().hex,
+        status='PENDING'
+    )
+    
+    max_sig_id_result = DepartmentSignature.objects.aggregate(max_id=Max('id'))
+    current_sig_id = (max_sig_id_result['max_id'] or 0)
+    for dept_name in app_config.DEPARTURE_SIGNATURE_DEPARTMENTS:
+        current_sig_id += 1
+        DepartmentSignature.objects.create(
+            id=current_sig_id,
+            departure=departure,
+            department_name=dept_name,
+            amount=0.00,
+            signed_on=None,
+            external_id=uuid.uuid4().hex
+        )
+    serializer = DepartureSerializer(departure)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departures_view(request):
+    list_departures_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_departures_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    status_filter = request.GET.get('status', 'CREATED').upper()
+    if status_filter not in ['POSTPONED', 'CREATED', 'CLOSED', 'CONFIRMED']:
+        status_filter = 'CREATED'
+        
+    #Print status of all departures for debugging
+    logger.info(f"Listing all status values that appear in Departures: {Departure.objects.values_list('status', flat=True).distinct()}")
+        
+    departures = Departure.objects.filter(status=status_filter).select_related('tenant').prefetch_related('signatures').order_by('tenant__move_out')
+    serializer = DepartureSerializer(departures, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departures_for_signing_view(request):
+    list_departures_for_signing_view.required_groups = app_config.DEPARTURE_SIGNATURE_DEPARTMENTS
+    list_departures_for_signing_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    user_groups = [group.name for group in request.user.groups.all()]
+    departures_to_sign = Departure.objects.filter(
+        status='CREATED',
+        signatures__department_name__in=user_groups,
+        signatures__signed_on__isnull=True
+    ).distinct().select_related('tenant').prefetch_related('signatures').order_by('tenant__move_out')
+    serializer = DepartureSerializer(departures_to_sign, many=True)
+    return Response(serializer.data)
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def sign_departure_signature_view(request, signature_id):
+    sign_departure_signature_view.required_groups = app_config.DEPARTURE_SIGNATURE_DEPARTMENTS + VERWALTUNG_ADMIN_GROUPS
+    sign_departure_signature_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    signature = get_object_or_404(DepartmentSignature, id=signature_id)
+    user_groups = [group.name for group in request.user.groups.all()]
+    if not any(g in user_groups for g in [signature.department_name] + VERWALTUNG_ADMIN_GROUPS):
+        return Response({"error": "You do not have permission to sign for this department."}, status=status.HTTP_403_FORBIDDEN)
+        
+    serializer = SignSignatureSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    signature.amount = serializer.validated_data['amount']
+    signature.signed_on = timezone.now().date()
+    signature.save()
+    return Response(DepartmentSignatureSerializer(signature).data, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def close_departure_view(request, tenant_id):
+    close_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    close_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+    
+    departure = get_object_or_404(Departure.objects.prefetch_related('signatures'), tenant_id=tenant_id)
+    if not all(sig.signed_on is not None for sig in departure.signatures.all()):
+        return Response({"error": "Cannot close departure. Not all departments have signed off."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    departure.status = 'CLOSED'
+    departure.save()
+    return Response(DepartureSerializer(departure).data, status=status.HTTP_200_OK)
