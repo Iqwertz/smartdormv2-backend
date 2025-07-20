@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature
 from django.utils import timezone
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -166,3 +166,17 @@ class ParcelSerializer(serializers.ModelSerializer):
         if obj.subtenant:
             return f"{obj.subtenant.name} {obj.subtenant.surname} (Associated Room: {obj.subtenant.room.name or 'N/A'})"
         return None
+
+class DepartureSerializer(serializers.ModelSerializer):
+    tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+
+    class Meta:
+        model = Departure
+        fields = ['tenant', 'status', 'tenant_name']
+
+class DepartmentSignatureSerializer(serializers.ModelSerializer):
+    departure = DepartureSerializer(read_only=True)
+
+    class Meta:
+        model = DepartmentSignature
+        fields = ['id', 'external_id', 'amount', 'department_name', 'signed_on', 'departure']

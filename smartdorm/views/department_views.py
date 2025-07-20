@@ -1,3 +1,4 @@
+from os import stat
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated
@@ -10,11 +11,11 @@ from django.db.models import Max
 from datetime import timedelta, date
 import uuid
 from django.shortcuts import get_object_or_404
-
+from decimal import Decimal, InvalidOperation
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room
-from ..serializers import TenantSerializer, EngagementSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer
+from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure
+from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -465,3 +466,130 @@ def delete_subtenant_view(request, subtenant_id):
     except ConnectionError as e:
         logger.error(f"Failed to delete subtenant '{username_to_delete}': {e}", exc_info=True)
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+# --- Department Signature Views ---
+DEPARTMENT_CONFIG = {
+    "tutoren": {"name": "TUTOREN", "group": "Tutoren"},
+    "bar": {"name": "BAR", "group": "Barreferat"},
+    "werk": {"name": "WERK", "group": "Werkreferat"},
+    "innen": {"name": "INNEN", "group": "Innenreferat"},
+    "finanzen": {"name": "FINANZEN", "group": "Finanzenreferat"},
+}
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_department_signatures_view(request, department_slug):
+    """
+    Lists departure signatures for a specific department.
+    Filters by signed status based on a query parameter.
+    - `?signed=false` (default): Shows unsigned signatures for 'CONFIRMED' departures.
+      This will also create signature entries if they don't exist for a confirmed departure.
+    - `?signed=true`: Shows all signed signatures.
+    """
+    if department_slug not in DEPARTMENT_CONFIG:
+        return Response({"error": "Invalid department specified."}, status=status.HTTP_404_NOT_FOUND)
+
+    config = DEPARTMENT_CONFIG[department_slug]
+    list_department_signatures_view.required_groups = [config["group"], 'ADMIN']
+
+    if not GroupAndEmployeeTypePermission().has_permission(request, list_department_signatures_view):
+        return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+
+    signed_status = request.query_params.get('signed', 'false').lower() == 'true'
+    SENTINEL_DATE = date(1900, 1, 1)
+
+    if signed_status:
+        queryset = DepartmentSignature.objects.select_related('departure', 'departure__tenant').filter(
+            department_name=config["name"],
+            signed_on__gt=SENTINEL_DATE
+        ).order_by('-signed_on')
+        #Filter out signatures that are not for confirmed departures
+        queryset = queryset.filter(departure__status='CONFIRMED')
+    else:
+        with transaction.atomic():
+            confirmed_departures = Departure.objects.filter(status='CONFIRMED')
+            
+            existing_signature_departure_ids = set(
+                DepartmentSignature.objects.filter(
+                    departure__in=confirmed_departures,
+                    department_name=config["name"]
+                ).values_list('departure_id', flat=True)
+            )
+
+            missing_departures = [
+                d for d in confirmed_departures if d.tenant_id not in existing_signature_departure_ids
+            ]
+
+            if missing_departures:
+                max_id_val = DepartmentSignature.objects.aggregate(max_id=Max('id'))['max_id'] or 0
+                
+                new_signatures_to_create = []
+                for i, departure in enumerate(missing_departures):
+                    new_signatures_to_create.append(
+                        DepartmentSignature(
+                            id=max_id_val + 1 + i,
+                            departure=departure,
+                            department_name=config["name"],
+                            amount=Decimal('0.00'),
+                            external_id=uuid.uuid4().hex,
+                            signed_on=SENTINEL_DATE
+                        )
+                    )
+                
+                DepartmentSignature.objects.bulk_create(new_signatures_to_create)
+        
+        queryset = DepartmentSignature.objects.select_related('departure', 'departure__tenant').filter(
+            department_name=config["name"],
+            signed_on=SENTINEL_DATE,
+            departure__status='CONFIRMED'
+        ).order_by('departure__tenant__surname', 'departure__tenant__name')
+
+    final_queryset = queryset.distinct()
+
+    serializer = DepartmentSignatureSerializer(final_queryset, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def update_department_signature_view(request, signature_id):
+    """
+    Updates a department signature, setting the amount and signing it if not already signed.
+    """
+    signature = get_object_or_404(DepartmentSignature.objects.select_related('departure'), id=signature_id)
+    
+    department_slug = next((slug for slug, conf in DEPARTMENT_CONFIG.items() if conf["name"] == signature.department_name), None)
+    
+    if not department_slug:
+        return Response({"error": "Signature belongs to an unknown department."}, status=status.HTTP_400_BAD_REQUEST)
+
+    config = DEPARTMENT_CONFIG[department_slug]
+    update_department_signature_view.required_groups = [config["group"], 'ADMIN']
+
+    if not GroupAndEmployeeTypePermission().has_permission(request, update_department_signature_view):
+        return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+
+    if signature.departure.status == 'CLOSED':
+        return Response({"error": "Cannot update signature for a closed departure."}, status=status.HTTP_403_FORBIDDEN)
+
+    amount_str = request.data.get('amount')
+    if amount_str is None:
+        return Response({"error": "Amount is required."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        signature.amount = Decimal(amount_str)
+    except (TypeError, InvalidOperation):
+        return Response({"error": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # If the signature has the sentinel date, update it to today's date to "sign" it.
+    SENTINEL_DATE = date(1900, 1, 1)
+    if signature.signed_on == SENTINEL_DATE:
+        signature.signed_on = timezone.now().date()
+    
+    signature.save()
+    
+    serializer = DepartmentSignatureSerializer(signature)
+    return Response(serializer.data, status=status.HTTP_200_OK)

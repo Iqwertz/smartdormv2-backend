@@ -51,6 +51,11 @@ subtenant_urlpatterns = [
     path('<int:subtenant_id>/delete/', department_views.delete_subtenant_view, name='subtenant-delete'),
 ]
 
+department_signature_urlpatterns = [
+    path('<str:department_slug>/list/', department_views.list_department_signatures_view, name='department-signature-list'),
+    path('<int:signature_id>/update/', department_views.update_department_signature_view, name='department-signature-update'),
+]
+
 department_urlpatterns = [
     # Tenant management
     path('tenant-data/', department_views.all_tenant_data_view, name='department-tenant-data'),
@@ -64,6 +69,8 @@ department_urlpatterns = [
     # Subtenant management
     path('subtenants/', include(subtenant_urlpatterns)),
     path('parcels/', include(parcel_urlpatterns)),
+    # Department Signatures
+    path('signatures/', include(department_signature_urlpatterns)),
 ]
 
 # Admin-related URLs

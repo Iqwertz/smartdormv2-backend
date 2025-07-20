@@ -32,6 +32,10 @@ class Tenant(models.Model):
     class Meta:
         db_table = 't_tenant'
         managed = False
+        
+    def get_full_name(self):
+        """Returns the person's full name."""
+        return f"{self.name} {self.surname}"
 
 # Example queries using tenants model
 def get_active_tenants():
