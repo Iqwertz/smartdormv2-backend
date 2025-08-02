@@ -32,6 +32,8 @@ tenant_urlpatterns = [
     path('hsv/', tenant_views.hsv_engagement_list_view, name='hsv-engagement-list'),
     path('my-engagements/', tenant_views.my_engagements_view, name='my-engagements'),
     path('global-settings/', tenant_views.get_global_settings_view, name='global-settings'),
+    path('my-departure/', tenant_views.my_departure_view, name='my-departure'),
+    path('my-departure/decide/', tenant_views.decide_departure_view, name='decide-departure'),
 ]
 
 # Engagement-related URLs
@@ -49,6 +51,14 @@ subtenant_urlpatterns = [
     path('<int:subtenant_id>/', department_views.get_subtenant_detail_view, name='subtenant-detail'),
     path('<int:subtenant_id>/update/', department_views.update_subtenant_view, name='subtenant-update'),
     path('<int:subtenant_id>/delete/', department_views.delete_subtenant_view, name='subtenant-delete'),
+]
+
+departure_management_urlpatterns = [
+    path('candidates/', department_views.list_departure_candidates_view, name='departure-candidates'),
+    path('create/', department_views.create_departure_view, name='departure-create'),
+    path('list/', department_views.list_departures_view, name='departure-list'),
+    path('<int:departure_id>/remind/', department_views.send_departure_reminder_view, name='departure-remind'),
+    path('<int:departure_id>/close/', department_views.close_departure_view, name='departure-close'),
 ]
 
 department_signature_urlpatterns = [
@@ -71,6 +81,8 @@ department_urlpatterns = [
     path('parcels/', include(parcel_urlpatterns)),
     # Department Signatures
     path('signatures/', include(department_signature_urlpatterns)),
+    # Departure Management
+    path('departures/', include(departure_management_urlpatterns))
 ]
 
 # Admin-related URLs

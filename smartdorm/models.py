@@ -129,10 +129,15 @@ class EngagementApplication(models.Model):
         managed = False
 
 class Departure(models.Model):
+    class Status(models.TextChoices):
+        CREATED = 'CREATED', 'Erstellt'
+        POSTPONED = 'POSTPONED', 'Verlängert'
+        CONFIRMED = 'CONFIRMED', 'Bestätigt'
+        CLOSED = 'CLOSED', 'Abgeschlossen'
     tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    status = models.CharField(max_length=255)
+    status = models.CharField(max_length=255, choices=Status.choices, default=Status.CREATED) # 'POSTPONED', 'CREATED', 'CLOSED', 'CONFIRMED'
 
     class Meta:
         db_table = 't_departure'

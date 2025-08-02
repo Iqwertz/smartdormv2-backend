@@ -168,11 +168,23 @@ class ParcelSerializer(serializers.ModelSerializer):
         return None
 
 class DepartureSerializer(serializers.ModelSerializer):
-    tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+    tenant = TenantSerializer(read_only=True)
 
     class Meta:
         model = Departure
-        fields = ['tenant', 'status', 'tenant_name']
+        fields = ['tenant', 'status', 'created_on', 'external_id']
+
+class DepartureDetailSerializer(serializers.ModelSerializer):
+    tenant = TenantSerializer(read_only=True)
+    signatures = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Departure
+        fields = ['tenant', 'status', 'created_on', 'external_id', 'signatures']
+
+    def get_signatures(self, obj):
+        signatures = obj.departmentsignature_set.all().order_by('department_name')
+        return DepartmentSignatureSerializer(signatures, many=True).data
 
 class DepartmentSignatureSerializer(serializers.ModelSerializer):
     departure = DepartureSerializer(read_only=True)

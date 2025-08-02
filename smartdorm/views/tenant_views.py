@@ -18,10 +18,11 @@ from django.db.models import Prefetch
 from django.utils import timezone  
 from collections import defaultdict
 from django.db.models import F
+from django.db import transaction
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Engagement, GlobalAppSettings
-from ..serializers import TenantSerializer, GlobalAppSettingsSerializer
+from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank
+from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -214,3 +215,62 @@ def get_global_settings_view(request):
             {"error": "An error occurred while retrieving global settings."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+        
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def my_departure_view(request):
+    my_departure_view.required_employee_types = ['TENANT']
+    
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
+        serializer = DepartureSerializer(departure)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except (Tenant.DoesNotExist, Departure.DoesNotExist):
+        return Response({"detail": "No open departure request found."}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error fetching departure for user {request.user.username}: {e}", exc_info=True)
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+@transaction.atomic
+def decide_departure_view(request):
+    decide_departure_view.required_employee_types = ['TENANT']
+
+    decision = request.data.get('decision', '').upper()
+    if decision not in ['CONFIRM', 'POSTPONE']:
+        return Response({"error": "Invalid decision. Must be 'CONFIRM' or 'POSTPONE'."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
+    except (Tenant.DoesNotExist, Departure.DoesNotExist):
+        return Response({"error": "No open departure request found to decide on."}, status=status.HTTP_404_NOT_FOUND)
+
+    if decision == 'POSTPONE':
+        departure.status = Departure.Status.POSTPONED
+        departure.save()
+        return Response({"message": "Departure successfully postponed."}, status=status.HTTP_200_OK)
+
+    elif decision == 'CONFIRM':
+        iban = request.data.get('iban')
+        name = request.data.get('name')
+        if not iban or not name:
+            return Response({"error": "IBAN and account holder name are required to confirm departure."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create or update bank details
+        DepositBank.objects.update_or_create(
+            tenant=tenant,
+            defaults={'name': name, 'iban': iban}
+        )
+
+        departure.status = Departure.Status.CONFIRMED
+        departure.save()
+        
+        return Response({"message": "Departure successfully confirmed."}, status=status.HTTP_200_OK)
+
+    return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

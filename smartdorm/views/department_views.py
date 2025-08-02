@@ -7,15 +7,16 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from datetime import timedelta, date
 import uuid
 from django.shortcuts import get_object_or_404
 from decimal import Decimal, InvalidOperation
+from dateutil.relativedelta import relativedelta
 
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure
-from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer
+from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -593,3 +594,140 @@ def update_department_signature_view(request, signature_id):
     
     serializer = DepartmentSignatureSerializer(signature)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# --- Departure Views ---
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departure_candidates_view(request):
+    list_departure_candidates_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_departure_candidates_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    today = timezone.now().date()
+    eight_months_from_now = today + relativedelta(months=8)
+
+    # Find tenants whose contracts end within 8 months but are not yet past
+    # and who do not already have a departure record. #Todo the move out threshold should be configurable in the config.py
+    candidates = Tenant.objects.filter(
+        move_out__lte=eight_months_from_now,
+        move_out__gte=today,
+        departure__isnull=True  # Exclude tenants with existing departure records
+    ).order_by('move_out')
+
+    serializer = TenantSerializer(candidates, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def create_departure_view(request):
+    create_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    create_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    tenant_id = request.data.get('tenant_id')
+    if not tenant_id:
+        return Response({"error": "Tenant ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    if Departure.objects.filter(tenant=tenant).exists():
+        return Response({"error": "Departure request for this tenant already exists."}, status=status.HTTP_409_CONFLICT)
+
+    departure = Departure.objects.create(
+        tenant=tenant,
+        external_id=uuid.uuid4().hex,
+        created_on=timezone.now().date(),
+        status=Departure.Status.CREATED
+    )
+    serializer = DepartureSerializer(departure)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departures_view(request):
+    list_departures_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_departures_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    status_filter = request.query_params.get('status', '').upper()
+    valid_statuses = [s.name for s in Departure.Status]
+    if status_filter not in valid_statuses:
+        return Response({"error": f"Invalid status. Valid options are: {', '.join(valid_statuses)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+    departures = Departure.objects.filter(status=status_filter).select_related('tenant')
+
+    if status_filter == Departure.Status.CONFIRMED:
+        # For confirmed, we need signatures, so prefetch them
+        departures = departures.prefetch_related('departmentsignature_set')
+        serializer = DepartureDetailSerializer(departures, many=True)
+    else:
+        serializer = DepartureSerializer(departures, many=True)
+
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def send_departure_reminder_view(request, departure_id):
+    send_departure_reminder_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    send_departure_reminder_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
+    if departure.status != Departure.Status.CREATED:
+        return Response({"error": "Can only send reminders for open departure requests."}, status=status.HTTP_400_BAD_REQUEST)
+
+    email_context = {
+        'tenant_name': departure.tenant.name,
+        'move_out_date': departure.tenant.move_out.strftime('%d.%m.%Y'),
+    }
+    email_sent = email_utils.send_email_message(
+        recipient_list=[departure.tenant.email],
+        subject="Erinnerung: Dein Auszug aus dem Schollheim",
+        html_template_name='email/departure-reminder.html',
+        context=email_context
+    )
+
+    if email_sent:
+        return Response({"message": "Reminder email sent successfully."}, status=status.HTTP_200_OK)
+    else:
+        return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def close_departure_view(request, departure_id):
+    close_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    close_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
+    if departure.status != Departure.Status.CONFIRMED:
+        return Response({"error": "Departure must be confirmed to be closed."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Check if all signatures are done
+    SENTINEL_DATE = date(1900, 1, 1)
+    unsigned_count = DepartmentSignature.objects.filter(
+        departure=departure,
+        signed_on=SENTINEL_DATE
+    ).count()
+
+    if unsigned_count > 0:
+        return Response({"error": f"{unsigned_count} department signature(s) are still missing."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Update tenant's move_out date if provided
+    new_move_out_date_str = request.data.get('move_out_date')
+    if new_move_out_date_str:
+        try:
+            new_move_out_date = date.fromisoformat(new_move_out_date_str)
+            tenant = departure.tenant
+            tenant.move_out = new_move_out_date
+            tenant.save()
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid date format for move_out_date. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+    departure.status = Departure.Status.CLOSED
+    departure.save()
+
+    return Response({"message": "Departure successfully closed."}, status=status.HTTP_200_OK)
