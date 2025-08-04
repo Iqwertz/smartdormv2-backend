@@ -1,8 +1,12 @@
 # Application specific settings for SmartDorm
 
+#-- Email Settings ---
+DEPARTMENT_EMAIL = 'verwaltung@schollheim.net'
+
 # --- Tenant Creation Settings ---
 PROBATION_PERIOD_DAYS = 180
-DEFAULT_CONTRACT_DURATION_DAYS = 365
+DEFAULT_CONTRACT_DURATION_DAYS = 365 * 3 
+DEFAULT_EXTENSION_DURATION_DAYS = 365
 
 # --- LDAP Settings ---
 # List of DNs for groups to which new tenants are automatically added.

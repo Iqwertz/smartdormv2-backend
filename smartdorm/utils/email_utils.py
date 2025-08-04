@@ -58,8 +58,8 @@ def send_email_message(
         # If in development mode, redirect all emails to the developer's email
         if not PRODUCTION:
             if DEVELOPER_EMAIL:
-                recipient_list = [DEVELOPER_EMAIL]
                 logger.info(f"Development mode: redirecting email that should go to {recipient_list} to developer email {DEVELOPER_EMAIL}")
+                recipient_list = [DEVELOPER_EMAIL]
             else:
                 logger.error("DEVELOPER_EMAIL environment variable is not set. Cannot redirect email in development mode.")
                 logger.error("Not sending email as no developer email is configured.")

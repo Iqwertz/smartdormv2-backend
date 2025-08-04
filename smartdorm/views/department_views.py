@@ -15,8 +15,8 @@ from decimal import Decimal, InvalidOperation
 from dateutil.relativedelta import relativedelta
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure
-from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer
+from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim
+from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
 from ..utils import ldap_utils, email_utils
 from ..utils.helper import generate_secure_password
 from .. import config as app_config
@@ -592,6 +592,29 @@ def update_department_signature_view(request, signature_id):
     
     signature.save()
     
+    #Send email to tenant depending on amount of debt
+    if signature.amount > Decimal('0.00'):
+        email_utils.send_email_message(
+            recipient_list=[signature.departure.tenant.email],
+            subject=f'Schulden: {config["group"]}',
+            html_template_name='email/tenant-departure-update-debt.html',
+            context={
+                'greeting': signature.departure.tenant.name,
+                'amount': signature.amount,
+                'departmentName': config["group"]
+            }
+        )
+    else:
+        email_utils.send_email_message(
+            recipient_list=[signature.departure.tenant.email],
+            subject=f'Keine Schulden: {config["group"]}',
+            html_template_name='email/tenant-departure-update.html',
+            context={
+                'greeting': signature.departure.tenant.name,
+                'departmentName': config["group"]
+            }
+        )
+    
     serializer = DepartmentSignatureSerializer(signature)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -642,6 +665,18 @@ def create_departure_view(request):
         status=Departure.Status.CREATED
     )
     serializer = DepartureSerializer(departure)
+    
+    #Send email to tenant
+    email_utils.send_email_message(
+        recipient_list=[tenant.email],
+        subject="Deine Wohnzeit läuft bald aus",
+        html_template_name='email/tenant-departure-creation.html',
+        context={
+            'greeting': tenant.name,
+            'departureDate': tenant.move_out.strftime('%d.%m.%Y'),
+        }
+    )
+    
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 @api_view(['GET'])
@@ -678,15 +713,15 @@ def send_departure_reminder_view(request, departure_id):
     if departure.status != Departure.Status.CREATED:
         return Response({"error": "Can only send reminders for open departure requests."}, status=status.HTTP_400_BAD_REQUEST)
 
-    email_context = {
-        'tenant_name': departure.tenant.name,
-        'move_out_date': departure.tenant.move_out.strftime('%d.%m.%Y'),
-    }
+    #Send email to tenant
     email_sent = email_utils.send_email_message(
         recipient_list=[departure.tenant.email],
-        subject="Erinnerung: Dein Auszug aus dem Schollheim",
-        html_template_name='email/departure-reminder.html',
-        context=email_context
+        subject="Erinnerung: Deine Wohnzeit läuft bald aus",
+        html_template_name='email/tenant-departure-creation.html',
+        context={
+            'greeting': departure.tenant.name,
+            'departureDate': departure.tenant.move_out.strftime('%d.%m.%Y'),
+        }
     )
 
     if email_sent:
@@ -729,5 +764,157 @@ def close_departure_view(request, departure_id):
 
     departure.status = Departure.Status.CLOSED
     departure.save()
+    
+    #Send email to tenant
+    email_utils.send_email_message(
+        recipient_list=[departure.tenant.email],
+        subject="Dein Auszug aus dem Schollheim",
+        html_template_name='email/tenant-departure-approval.html',
+        context={
+            'greeting': departure.tenant.name,
+            'departureDate': departure.tenant.move_out.strftime('%d.%m.%Y')
+        }
+    )
 
     return Response({"message": "Departure successfully closed."}, status=status.HTTP_200_OK)
+
+
+# --- Claim (Extension) Views ---
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_claims_view(request):
+    list_claims_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    list_claims_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    status_filter = request.query_params.get('status', '').upper()
+    
+    if status_filter == 'COMPLETED':
+        queryset = Claim.objects.filter(
+            Q(status=Claim.Status.APPROVED) | Q(status=Claim.Status.REJECTED)
+        ).select_related('tenant').order_by('-created_on')
+    else:
+        valid_statuses = [s.name for s in Claim.Status]
+        if status_filter not in valid_statuses:
+            return Response({"error": f"Invalid status. Valid options are: {', '.join(valid_statuses)} or COMPLETED"}, status=status.HTTP_400_BAD_REQUEST)
+        queryset = Claim.objects.filter(status=status_filter).select_related('tenant').order_by('created_on')
+
+    serializer = ClaimSerializer(queryset, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def send_claim_reminder_view(request, claim_id):
+    send_claim_reminder_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    send_claim_reminder_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
+    if claim.status != Claim.Status.CREATED:
+        return Response({"error": "Can only send reminders for open claims."}, status=status.HTTP_400_BAD_REQUEST)
+
+    email_sent = email_utils.send_email_message(
+        recipient_list=[claim.tenant.email],
+        subject="Erinnerung: Dein Antrag auf Wohnzeitverlängerung",
+        html_template_name='email/tenant-extension-reminder.html',
+        context={
+            'greeting': claim.tenant.name,
+            'departureDateMinus3Months': (claim.tenant.move_out - timedelta(days=90)).strftime('%d.%m.%Y'),
+            'departureDate': claim.tenant.move_out.strftime('%d.%m.%Y'),
+        }
+    )
+
+    if email_sent:
+        return Response({"message": "Reminder email sent successfully."}, status=status.HTTP_200_OK)
+    return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def update_claim_status_view(request, claim_id):
+    update_claim_status_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    update_claim_status_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    claim = get_object_or_404(Claim, id=claim_id)
+    new_status = request.data.get('status', '').upper()
+
+    if claim.status == Claim.Status.CREATED and new_status == Claim.Status.PROCESSING:
+        claim.status = Claim.Status.PROCESSING
+        claim.save()
+        serializer = ClaimSerializer(claim)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    return Response({"error": f"Invalid status transition from {claim.status} to {new_status}."}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def process_claim_decision_view(request, claim_id):
+    process_claim_decision_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    process_claim_decision_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
+    if claim.status != Claim.Status.PROCESSING:
+        return Response({"error": "Claim is not in 'PROCESSING' state."}, status=status.HTTP_400_BAD_REQUEST)
+
+    decision = request.data.get('decision', '').upper()
+    tenant = claim.tenant
+
+    if decision == 'REJECTED':
+        claim.status = Claim.Status.REJECTED
+        claim.save()
+        # Find the postponed departure and set it to confirmed
+        departure = get_object_or_404(Departure, tenant=tenant, status=Departure.Status.POSTPONED)
+        departure.status = Departure.Status.CONFIRMED
+        departure.save()
+        
+        #Send email to tenant
+        email_utils.send_email_message(
+            recipient_list=[tenant.email],
+            subject="Dein Antrag auf Wohnzeitverlängerung wurde abgelehnt",
+            html_template_name='email/tenant-extension-rejection.html',
+            context={
+                'greeting': tenant.name,
+                'departureDate': tenant.move_out.strftime('%d.%m.%Y'),
+                'departureDate1': (tenant.move_out + timedelta(days=30)).strftime('%d.%m.%Y'),
+                'departureDate2': (tenant.move_out + timedelta(days=60)).strftime('%d.%m.%Y')
+            }
+        )
+        
+        return Response({"message": "Claim rejected and departure confirmed."}, status=status.HTTP_200_OK)
+
+    elif decision == 'APPROVED':
+        claim.status = Claim.Status.APPROVED
+        claim.save()
+        
+        tenant.extension = (tenant.extension or 0) + 1
+        
+        new_move_out_date_str = request.data.get('move_out_date')
+        if new_move_out_date_str:
+            try:
+                tenant.move_out = date.fromisoformat(new_move_out_date_str)
+            except (ValueError, TypeError):
+                return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            tenant.move_out += timedelta(days=app_config.DEFAULT_EXTENSION_DURATION_DAYS)
+        
+        tenant.save()
+        Departure.objects.filter(tenant=tenant).delete()
+        
+        #Send email to tenant
+        email_utils.send_email_message(
+            recipient_list=[tenant.email],
+            subject="Deine Wohnzeitverlängerung wurde genehmigt",
+            html_template_name='email/tenant-extension-approval.html',
+            context={
+                'greeting': tenant.name,
+                'departureDate': tenant.move_out.strftime('%d.%m.%Y'),
+            }
+        )
+        
+        return Response({"message": "Claim approved, tenant extended, and departure deleted."}, status=status.HTTP_200_OK)
+
+    return Response({"error": "Invalid decision. Must be 'APPROVED' or 'REJECTED'."}, status=status.HTTP_400_BAD_REQUEST)

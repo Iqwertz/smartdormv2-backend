@@ -12,16 +12,20 @@ from rest_framework import status
 from django.conf import settings
 from django.http import HttpResponseServerError, HttpResponse
 import logging
+import uuid
 from smartdorm.serializers import TenantSerializer, EngagementSerializer, HsvTenantSerializer
 from ..models import Engagement
-from django.db.models import Prefetch
+from ..utils import email_utils
+from .. import config as app_config
+from django.db.models import Prefetch, Max
 from django.utils import timezone  
 from collections import defaultdict
 from django.db.models import F
 from django.db import transaction
 
+
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank
+from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim
 from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer
 
 logger = logging.getLogger(__name__)
@@ -254,6 +258,26 @@ def decide_departure_view(request):
     if decision == 'POSTPONE':
         departure.status = Departure.Status.POSTPONED
         departure.save()
+        # Create a new claim for extension
+        max_id_result = Claim.objects.aggregate(max_id=Max('id'))
+        new_id = (max_id_result['max_id'] or 0) + 1
+        Claim.objects.create(
+            id=new_id, external_id=uuid.uuid4().hex, tenant=tenant,
+            status=Claim.Status.CREATED, type=Claim.Type.EXTENSION,
+            created_on=timezone.now().date()
+        )
+        
+        # Send email notification to the department
+        email_utils.send_email_message(
+            recipient_list=[app_config.DEPARTMENT_EMAIL],
+            subject=f"{tenant.name} {tenant.surname} möchte verlängern",
+            html_template_name='email/tenant-departure-postponement.html',
+            context={
+                'name': f"{tenant.name} {tenant.surname}",
+                'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+            }
+        )
+
         return Response({"message": "Departure successfully postponed."}, status=status.HTTP_200_OK)
 
     elif decision == 'CONFIRM':
@@ -270,7 +294,30 @@ def decide_departure_view(request):
 
         departure.status = Departure.Status.CONFIRMED
         departure.save()
+
+        # Send email notification to the department
+        email_utils.send_email_message(
+            recipient_list=[app_config.DEPARTMENT_EMAIL],
+            subject=f"{tenant.name} {tenant.surname} möchte ausziehen",
+            html_template_name='email/management-departure-confirmation.html',
+            context={
+                'name': f"{tenant.name} {tenant.surname}",
+                'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+                'departureDate': tenant.move_out,
+            }
+        )
         
+        #Send email to tenant
+        email_utils.send_email_message(
+            recipient_list=[tenant.email],
+            subject="Dein Auszug aus dem Schollheim",
+            html_template_name='email/tenant-departure-confirmation.html',
+            context={
+                'greeting': {tenant.name},
+                'departureDate': tenant.move_out,
+            }
+        )
+
         return Response({"message": "Departure successfully confirmed."}, status=status.HTTP_200_OK)
 
     return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -66,6 +66,14 @@ department_signature_urlpatterns = [
     path('<int:signature_id>/update/', department_views.update_department_signature_view, name='department-signature-update'),
 ]
 
+claim_management_urlpatterns = [
+    path('list/', department_views.list_claims_view, name='claim-list'),
+    path('<int:claim_id>/remind/', department_views.send_claim_reminder_view, name='claim-remind'),
+    path('<int:claim_id>/status/', department_views.update_claim_status_view, name='claim-update-status'),
+    path('<int:claim_id>/decide/', department_views.process_claim_decision_view, name='claim-decide'),
+]
+
+
 department_urlpatterns = [
     # Tenant management
     path('tenant-data/', department_views.all_tenant_data_view, name='department-tenant-data'),
@@ -82,7 +90,9 @@ department_urlpatterns = [
     # Department Signatures
     path('signatures/', include(department_signature_urlpatterns)),
     # Departure Management
-    path('departures/', include(departure_management_urlpatterns))
+    path('departures/', include(departure_management_urlpatterns)),
+    # Claim (Extension) Management
+    path('claims/', include(claim_management_urlpatterns)),
 ]
 
 # Admin-related URLs

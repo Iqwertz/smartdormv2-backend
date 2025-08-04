@@ -206,11 +206,20 @@ class DepositBank(models.Model):
         managed = False
 
 class Claim(models.Model):
+    class Status(models.TextChoices):
+        CREATED = 'CREATED', 'Erstellt'
+        PROCESSING = 'PROCESSING', 'In Bearbeitung'
+        APPROVED = 'APPROVED', 'Genehmigt'
+        REJECTED = 'REJECTED', 'Abgelehnt'
+
+    class Type(models.TextChoices):
+        EXTENSION = 'EXTENSION', 'Verlängerung'
+
     id = models.IntegerField(primary_key=True)
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    status = models.CharField(max_length=20)
-    type = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.CREATED)
+    type = models.CharField(max_length=20, choices=Type.choices)
     tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
 
     class Meta:
