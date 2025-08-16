@@ -18,7 +18,7 @@ from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
 from ..utils import ldap_utils, email_utils
-from ..utils.helper import generate_secure_password
+from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
 from .. import config as app_config
 
 import logging
@@ -485,7 +485,6 @@ def list_department_signatures_view(request, department_slug):
     Lists departure signatures for a specific department.
     Filters by signed status based on a query parameter.
     - `?signed=false` (default): Shows unsigned signatures for 'CONFIRMED' departures.
-      This will also create signature entries if they don't exist for a confirmed departure.
     - `?signed=true`: Shows all signed signatures.
     """
     if department_slug not in DEPARTMENT_CONFIG:
@@ -503,43 +502,10 @@ def list_department_signatures_view(request, department_slug):
     if signed_status:
         queryset = DepartmentSignature.objects.select_related('departure', 'departure__tenant').filter(
             department_name=config["name"],
-            signed_on__gt=SENTINEL_DATE
+            signed_on__gt=SENTINEL_DATE,
+            departure__status='CONFIRMED'
         ).order_by('-signed_on')
-        #Filter out signatures that are not for confirmed departures
-        queryset = queryset.filter(departure__status='CONFIRMED')
     else:
-        with transaction.atomic():
-            confirmed_departures = Departure.objects.filter(status='CONFIRMED')
-            
-            existing_signature_departure_ids = set(
-                DepartmentSignature.objects.filter(
-                    departure__in=confirmed_departures,
-                    department_name=config["name"]
-                ).values_list('departure_id', flat=True)
-            )
-
-            missing_departures = [
-                d for d in confirmed_departures if d.tenant_id not in existing_signature_departure_ids
-            ]
-
-            if missing_departures:
-                max_id_val = DepartmentSignature.objects.aggregate(max_id=Max('id'))['max_id'] or 0
-                
-                new_signatures_to_create = []
-                for i, departure in enumerate(missing_departures):
-                    new_signatures_to_create.append(
-                        DepartmentSignature(
-                            id=max_id_val + 1 + i,
-                            departure=departure,
-                            department_name=config["name"],
-                            amount=Decimal('0.00'),
-                            external_id=uuid.uuid4().hex,
-                            signed_on=SENTINEL_DATE
-                        )
-                    )
-                
-                DepartmentSignature.objects.bulk_create(new_signatures_to_create)
-        
         queryset = DepartmentSignature.objects.select_related('departure', 'departure__tenant').filter(
             department_name=config["name"],
             signed_on=SENTINEL_DATE,
@@ -870,6 +836,9 @@ def process_claim_decision_view(request, claim_id):
         departure = get_object_or_404(Departure, tenant=tenant, status=Departure.Status.POSTPONED)
         departure.status = Departure.Status.CONFIRMED
         departure.save()
+        
+        # Create signatures and notify departments
+        create_and_notify_departure_signatures(departure)
         
         #Send email to tenant
         email_utils.send_email_message(

@@ -27,6 +27,7 @@ from django.db import transaction
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim
 from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer
+from ..utils.helper import create_and_notify_departure_signatures
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,9 @@ def decide_departure_view(request):
 
         departure.status = Departure.Status.CONFIRMED
         departure.save()
+
+        # Create open signatures and notify departments
+        create_and_notify_departure_signatures(departure)
 
         # Send email notification to the department
         email_utils.send_email_message(

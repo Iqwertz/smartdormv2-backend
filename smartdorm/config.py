@@ -3,6 +3,10 @@
 #-- Email Settings ---
 DEPARTMENT_EMAIL = 'verwaltung@schollheim.net'
 
+#-- Departure Settings --
+DEPARTURE_SIGNATURE_ENGAGEMENTS = ["TUTOREN", "BAR", "WERK", "INNEN", "FINANZEN"]
+
+
 # --- Tenant Creation Settings ---
 PROBATION_PERIOD_DAYS = 180
 DEFAULT_CONTRACT_DURATION_DAYS = 365 * 3 
