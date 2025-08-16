@@ -475,6 +475,23 @@ DEPARTMENT_CONFIG = {
     "werk": {"name": "WERK", "group": "Werkreferat"},
     "innen": {"name": "INNEN", "group": "Innenreferat"},
     "finanzen": {"name": "FINANZEN", "group": "Finanzenreferat"},
+    "h1eg": {"name": "H1EG", "group": "Flursprecher-H1EG"},
+    "h1l1": {"name": "H1L1", "group": "Flursprecher-H1L1"},
+    "h1l2": {"name": "H1L2", "group": "Flursprecher-H1L2"},
+    "h1l3": {"name": "H1L3", "group": "Flursprecher-H1L3"},
+    "h1l4": {"name": "H1L4", "group": "Flursprecher-H1L4"},
+    "h1l5": {"name": "H1L5", "group": "Flursprecher-H1L5"},
+    "h1r1": {"name": "H1R1", "group": "Flursprecher-H1R1"},
+    "h1r2": {"name": "H1R2", "group": "Flursprecher-H1R2"},
+    "h1r3": {"name": "H1R3", "group": "Flursprecher-H1R3"},
+    "h1r4": {"name": "H1R4", "group": "Flursprecher-H1R4"},
+    "h1r5": {"name": "H1R5", "group": "Flursprecher-H1R5"},
+    "h2eg": {"name": "H2EG", "group": "Flursprecher-H2EG"},
+    "h2f1": {"name": "H2F1", "group": "Flursprecher-H2F1"},
+    "h2f2": {"name": "H2F2", "group": "Flursprecher-H2F2"},
+    "h2f3": {"name": "H2F3", "group": "Flursprecher-H2F3"},
+    "h2f4": {"name": "H2F4", "group": "Flursprecher-H2F4"},
+    "h2f5": {"name": "H2F5", "group": "Flursprecher-H2F5"},
 }
 
 @api_view(['GET'])
