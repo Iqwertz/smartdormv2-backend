@@ -5,11 +5,13 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.db.models import Max
+import uuid
 
-from ..utils.helper import checkValidSemesterFormat
+from ..utils.helper import checkValidSemesterFormat, get_next_semester
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import EngagementApplication, GlobalAppSettings, Engagement
-from ..serializers import GlobalAppSettingsSerializer
+from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant
+from ..serializers import GlobalAppSettingsSerializer, EngagementApplicationListSerializer, HeimratEngagementApplicationCreateSerializer
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -228,7 +230,7 @@ def generate_applications_pdf(request):
     # Fetch applications, prefetch related tenant and department for efficiency
     # Adjust the filter as needed (e.g., specific semester)
     settings = GlobalAppSettings.load()
-    semester_filter = request.GET.get('semester', settings.current_semester) # Example: get semester from query param or default
+    semester_filter = request.GET.get('semester', get_next_semester(settings.current_semester)) # Example: get semester from query param or default
     applications = EngagementApplication.objects.select_related(
         'department', 'tenant'
     ).filter(
@@ -267,7 +269,7 @@ def set_current_semester_view(request):
 
     new_semester = request.data.get('current_semester')
     
-    if not new_semester or not isinstance(new_semester, str) or not helper.checkValidSemesterFormat(new_semester):
+    if not new_semester or not isinstance(new_semester, str) or not checkValidSemesterFormat(new_semester):
         return Response(
             {"error": "Field 'current_semester' is required and must be a string in the format SSYY or WSYY/YY."},
             status=status.HTTP_400_BAD_REQUEST
@@ -352,7 +354,96 @@ def set_show_applications_view(request):
             {"error": "An error occurred while updating the show_applications status."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-        
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def heimrat_list_applications_view(request):
+    """
+    API endpoint for Heimrat to view all applications for the next semester,
+    regardless of the 'show_applications' setting.
+    """
+    heimrat_list_applications_view.required_groups = ['Heimrat', 'ADMIN']
+
+    settings = GlobalAppSettings.load()
+    next_semester = get_next_semester(settings.current_semester)
+    if not next_semester:
+        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    applications = EngagementApplication.objects.filter(
+        semester=next_semester
+    ).select_related('tenant', 'department').order_by('department__name', 'tenant__surname')
+
+    serializer = EngagementApplicationListSerializer(applications, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def heimrat_delete_application_view(request, app_id):
+    """
+    API endpoint for Heimrat to delete any engagement application.
+    """
+    heimrat_delete_application_view.required_groups = ['Heimrat', 'ADMIN']
+
+    try:
+        application = EngagementApplication.objects.get(id=app_id)
+        application.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    except EngagementApplication.DoesNotExist:
+        return Response({"error": "Application not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@parser_classes([MultiPartParser, FormParser])
+def heimrat_create_application_view(request):
+    """
+    API endpoint for Heimrat to create an application on behalf of a tenant,
+    bypassing the 'applications_open' check.
+    """
+    heimrat_create_application_view.required_groups = ['Heimrat', 'ADMIN']
+    
+    settings = GlobalAppSettings.load()
+    next_semester = get_next_semester(settings.current_semester)
+    if not next_semester:
+        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    data = request.data.copy()
+    tenant_id = data.get('tenant')
+    department_id = data.get('department')
+
+    if EngagementApplication.objects.filter(tenant_id=tenant_id, semester=next_semester, department_id=department_id).exists():
+        return Response({"error": f"This tenant has already applied for this department for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
+
+    serializer = HeimratEngagementApplicationCreateSerializer(data=data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    validated_data = serializer.validated_data
+    
+    max_id_result = EngagementApplication.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+    image_file = request.FILES.get('image')
+
+    try:
+        EngagementApplication.objects.create(
+            id=new_id,
+            external_id=uuid.uuid4().hex,
+            tenant=validated_data['tenant'],
+            semester=next_semester,
+            department=validated_data['department'],
+            motivation=validated_data['motivation'],
+            image=image_file.read() if image_file else None,
+            image_name=image_file.name if image_file else None,
+        )
+        return Response({"message": "Application created successfully on behalf of the tenant."}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.error(f"Heimrat error creating engagement application: {e}", exc_info=True)
+        return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])

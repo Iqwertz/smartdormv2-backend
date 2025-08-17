@@ -43,6 +43,9 @@ tenant_urlpatterns = [
 # Engagement-related URLs
 engagement_urlpatterns = [
     path('heimrat/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'),
+    path('heimrat/applications/list/', engagement_views.heimrat_list_applications_view, name='heimrat-list-applications'),
+    path('heimrat/applications/create/', engagement_views.heimrat_create_application_view, name='heimrat-create-application'),
+    path('heimrat/applications/<int:app_id>/delete/', engagement_views.heimrat_delete_application_view, name='heimrat-delete-application'),
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
     path('heimrat/set-show-applications/', engagement_views.set_show_applications_view, name='set-show-applications'),

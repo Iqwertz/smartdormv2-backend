@@ -160,6 +160,17 @@ class MyEngagementApplicationSerializer(serializers.ModelSerializer):
         model = EngagementApplication
         fields = ['id', 'semester', 'department', 'motivation']
 
+class HeimratEngagementApplicationCreateSerializer(serializers.ModelSerializer):
+    tenant = serializers.PrimaryKeyRelatedField(queryset=Tenant.objects.all())
+
+    class Meta:
+        model = EngagementApplication
+        fields = ['tenant', 'department', 'motivation', 'image', 'image_name']
+        extra_kwargs = {
+            'image': {'required': False, 'allow_null': True},
+            'image_name': {'required': False, 'allow_blank': True}
+        }
+
 class ParcelCreateRequestSerializer(serializers.Serializer):
     room = serializers.CharField(max_length=255, required=False, allow_blank=True)
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)
