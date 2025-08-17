@@ -1,6 +1,7 @@
 #In this file we have all views that are in some way restricted to a engagement role
 from django.http import HttpResponse
 from django.utils import timezone
+from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
@@ -367,10 +368,6 @@ def set_show_applications_view(request):
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 def heimrat_list_applications_view(request):
-    """
-    API endpoint for Heimrat to view all applications for the next semester,
-    regardless of the 'show_applications' setting.
-    """
     heimrat_list_applications_view.required_groups = ['Heimrat', 'ADMIN']
 
     settings = GlobalAppSettings.load()
@@ -378,14 +375,41 @@ def heimrat_list_applications_view(request):
     if not next_semester:
         return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    applications = EngagementApplication.objects.filter(
+    # --- THE FIX: Use .values() for maximum performance ---
+    applications_data = EngagementApplication.objects.filter(
         semester=next_semester
-    ).select_related('tenant', 'department').defer(
-        'image', 'image_name'  # For speed optimization
-    ).order_by('department__name', 'tenant__surname')
+    ).order_by('department_id', 'tenant_id').values(
+        'id',
+        'motivation',
+        'image_name',
+        'tenant__name',
+        'tenant__surname',
+        'department__id',
+        'department__full_name'
+    )
 
-    serializer = EngagementApplicationListSerializer(applications, many=True, context={'request': request})
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    results = []
+    for app in applications_data:
+        image_url = None
+        if app['image_name']:
+            image_url = request.build_absolute_uri(
+                reverse('engagements:heimrat-get-application-image', kwargs={'app_id': app['id']})
+            )
+
+        results.append({
+            'id': app['id'],
+            'motivation': app['motivation'],
+            'tenant': {
+                'name': app['tenant__name'],
+                'surname': app['tenant__surname']
+            },
+            'department': {
+                'id': app['department__id'],
+                'full_name': app['department__full_name']
+            },
+            'image_url': image_url
+        })
+    return Response(results)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])

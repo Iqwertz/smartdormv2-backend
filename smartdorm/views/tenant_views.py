@@ -6,6 +6,7 @@ from django.views.decorators.http import require_POST
 from django.middleware.csrf import get_token
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
@@ -395,14 +396,47 @@ def list_engagement_applications_view(request):
     if not next_semester:
         return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    applications = EngagementApplication.objects.filter(
+    # --- THE FIX: Use .values() for maximum performance ---
+    # We select only the data we need, directly into dictionaries.
+    # This avoids creating expensive model instances.
+    applications_data = EngagementApplication.objects.filter(
         semester=next_semester
-    ).select_related('tenant', 'department').defer(
-        'image', 'image_name'  # Dont fetch heavy images, for performance, also image column should be updated some times in the future
-    ).order_by('department__name', 'tenant__surname')
+    ).order_by('department_id', 'tenant_id').values(
+        'id',
+        'motivation',
+        'image_name',  # Fetching the small image_name is fast
+        'tenant__name',
+        'tenant__surname',
+        'department__id',
+        'department__full_name'
+    )
 
-    serializer = EngagementApplicationListSerializer(applications, many=True, context={'request': request})
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    # Manually construct the final JSON structure, which is very fast.
+    results = []
+    for app in applications_data:
+        image_url = None
+        # If there's an image_name, an image exists.
+        if app['image_name']:
+            image_url = request.build_absolute_uri(
+                reverse('tenants:get-application-image', kwargs={'app_id': app['id']})
+            )
+
+        results.append({
+            'id': app['id'],
+            'motivation': app['motivation'],
+            'tenant': {
+                'name': app['tenant__name'],
+                'surname': app['tenant__surname']
+            },
+            'department': {
+                'id': app['department__id'],
+                'full_name': app['department__full_name']
+                # The frontend doesn't need department 'name', only 'full_name'
+            },
+            'image_url': image_url
+        })
+
+    return Response(results)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
