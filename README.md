@@ -1,6 +1,7 @@
 # SmartDorm Backend
 
 Django-based backend for the SmartDorm dormitory management system.
+A overview documentation (Mostly AI generated, but checked for accuracy) is in the /docs folder.
 
 ## Quick Start
 
