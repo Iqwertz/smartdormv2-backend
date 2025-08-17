@@ -42,15 +42,26 @@ tenant_urlpatterns = [
 
 # Engagement-related URLs
 engagement_urlpatterns = [
+    # Application Management for Heimrat
     path('heimrat/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'),
     path('heimrat/applications/list/', engagement_views.heimrat_list_applications_view, name='heimrat-list-applications'),
     path('heimrat/applications/create/', engagement_views.heimrat_create_application_view, name='heimrat-create-application'),
     path('heimrat/applications/<int:app_id>/delete/', engagement_views.heimrat_delete_application_view, name='heimrat-delete-application'),
+    
+    # Engagement Management for Heimrat/Inforeferat
+    path('heimrat/engagements/list/', engagement_views.list_engagements_admin_view, name='admin-list-engagements'),
+    path('heimrat/engagements/create/', engagement_views.create_engagement_admin_view, name='admin-create-engagement'),
+    path('heimrat/engagements/<int:engagement_id>/update-points/', engagement_views.update_engagement_points_view, name='admin-update-engagement-points'),
+    path('heimrat/engagements/<int:engagement_id>/delete/', engagement_views.delete_engagement_view, name='admin-delete-engagement'),
+    path('heimrat/engagements/compensate-all/', engagement_views.compensate_all_engagements_view, name='admin-compensate-all'),
+
+    # Settings for Heimrat
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
     path('heimrat/set-show-applications/', engagement_views.set_show_applications_view, name='set-show-applications'),
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
 ]
+
 
 # Department-related URLs
 subtenant_urlpatterns = [

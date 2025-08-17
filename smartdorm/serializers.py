@@ -248,3 +248,38 @@ class ClaimSerializer(serializers.ModelSerializer):
     class Meta:
         model = Claim
         fields = ['id', 'created_on', 'status', 'type', 'tenant', 'external_id']
+        
+class AdminTenantSerializer(serializers.ModelSerializer):
+    """Minimal tenant info for the engagement list."""
+    class Meta:
+        model = Tenant
+        fields = ['id', 'name', 'surname', 'email', 'current_room', 'current_floor']
+
+class AdminEngagementListSerializer(serializers.ModelSerializer):
+    """Detailed serializer for listing engagements in the admin view."""
+    tenant = AdminTenantSerializer(read_only=True)
+    department = DepartmentSerializer(read_only=True)
+
+    class Meta:
+        model = Engagement
+        fields = ['id', 'tenant', 'department', 'semester', 'points', 'note', 'compensate']
+
+class EngagementCreateByHeimratSerializer(serializers.Serializer):
+    tenant_id = serializers.IntegerField()
+    department_id = serializers.IntegerField()
+    semester = serializers.CharField(max_length=255)
+    note = serializers.CharField(required=False, allow_blank=True)
+    compensate = serializers.BooleanField(default=False)
+
+    def validate_tenant_id(self, value):
+        if not Tenant.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Tenant not found.")
+        return value
+    
+    def validate_department_id(self, value):
+        if not Department.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Department not found.")
+        return value
+
+class EngagementPointUpdateSerializer(serializers.Serializer):
+    points = serializers.DecimalField(max_digits=19, decimal_places=2)

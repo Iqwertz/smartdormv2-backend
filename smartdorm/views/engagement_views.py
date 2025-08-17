@@ -7,11 +7,17 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Max
 import uuid
+from django.shortcuts import get_object_or_404
+from django.db import transaction
 
 from ..utils.helper import checkValidSemesterFormat, get_next_semester
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant
-from ..serializers import GlobalAppSettingsSerializer, EngagementApplicationListSerializer, HeimratEngagementApplicationCreateSerializer
+from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant, Department
+from ..serializers import (
+    GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
+    HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
+    EngagementCreateByHeimratSerializer, EngagementPointUpdateSerializer
+)
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -443,6 +449,100 @@ def heimrat_create_application_view(request):
     except Exception as e:
         logger.error(f"Heimrat error creating engagement application: {e}", exc_info=True)
         return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+HEIMRAT_INFO_GROUPS = ['Heimrat', 'Inforeferat', 'ADMIN']
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_engagements_admin_view(request):
+    """
+    Lists engagements, filterable by compensation status.
+    ?compensated=true or ?compensated=false
+    """
+    list_engagements_admin_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    compensated = request.query_params.get('compensated', '').lower()
+    if compensated not in ['true', 'false']:
+        return Response({"error": "Query parameter 'compensated' must be 'true' or 'false'."}, status=status.HTTP_400_BAD_REQUEST)
+
+    queryset = Engagement.objects.filter(
+        compensate=(compensated == 'true')
+    ).select_related('tenant', 'department').order_by('-semester', 'tenant__surname')
+    
+    serializer = AdminEngagementListSerializer(queryset, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def create_engagement_admin_view(request):
+    """ Creates a new engagement for a tenant. """
+    create_engagement_admin_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    serializer = EngagementCreateByHeimratSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    data = serializer.validated_data
+    department = Department.objects.get(id=data['department_id'])
+    
+    max_id_result = Engagement.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+    
+    engagement = Engagement.objects.create(
+        id=new_id,
+        external_id=uuid.uuid4().hex,
+        tenant_id=data['tenant_id'],
+        department_id=data['department_id'],
+        semester=data['semester'],
+        note=data.get('note', ''),
+        compensate=data.get('compensate', False),
+        points=department.points
+    )
+    
+    response_serializer = AdminEngagementListSerializer(engagement)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def update_engagement_points_view(request, engagement_id):
+    """ Updates the points for a specific engagement. """
+    update_engagement_points_view.required_groups = HEIMRAT_INFO_GROUPS
+    
+    engagement = get_object_or_404(Engagement, id=engagement_id)
+    serializer = EngagementPointUpdateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    engagement.points = serializer.validated_data['points']
+    engagement.save()
+    
+    response_serializer = AdminEngagementListSerializer(engagement)
+    return Response(response_serializer.data)
+
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def delete_engagement_view(request, engagement_id):
+    """ Deletes an engagement. """
+    delete_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
+    
+    engagement = get_object_or_404(Engagement, id=engagement_id)
+    engagement.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def compensate_all_engagements_view(request):
+    """ Sets all uncompensated engagements to compensated. """
+    compensate_all_engagements_view.required_groups = HEIMRAT_INFO_GROUPS
+    
+    updated_count = Engagement.objects.filter(compensate=False).update(compensate=True)
+    return Response({"message": f"{updated_count} engagement(s) successfully compensated."})
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
