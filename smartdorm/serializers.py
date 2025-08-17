@@ -83,7 +83,7 @@ class TenantMoveSerializer(serializers.Serializer):
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = ['name', 'full_name', 'id']
+        fields = ['id', 'name', 'full_name']
 
 class EngagementSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer(read_only=True)
@@ -152,6 +152,14 @@ class EngagementApplicationListSerializer(serializers.ModelSerializer):
         if obj.image:
             return base64.b64encode(obj.image).decode('utf-8')
         return None
+
+class MyEngagementApplicationSerializer(serializers.ModelSerializer):
+    department = DepartmentSerializer(read_only=True)
+
+    class Meta:
+        model = EngagementApplication
+        fields = ['id', 'semester', 'department', 'motivation']
+
 class ParcelCreateRequestSerializer(serializers.Serializer):
     room = serializers.CharField(max_length=255, required=False, allow_blank=True)
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)

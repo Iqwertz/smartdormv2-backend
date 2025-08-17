@@ -24,9 +24,10 @@ from django.db.models import F
 from django.db import transaction
 from rest_framework.parsers import MultiPartParser, FormParser
 
+
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
-from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer
+from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer, MyEngagementApplicationSerializer
 from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
 
 logger = logging.getLogger(__name__)
@@ -347,9 +348,10 @@ def create_engagement_application_view(request):
     if not next_semester:
         return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # Check for existing application
-    if EngagementApplication.objects.filter(tenant=tenant, semester=next_semester).exists():
-        return Response({"error": f"You have already submitted an application for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
+    # Check for existing application for the same department in the same semester
+    department_id = request.data.get('department')
+    if EngagementApplication.objects.filter(tenant=tenant, semester=next_semester, department_id=department_id).exists():
+        return Response({"error": f"You have already applied for this department for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
     
     data = request.data.copy()
     serializer = EngagementApplicationCreateSerializer(data=data)
@@ -397,3 +399,43 @@ def list_engagement_applications_view(request):
 
     serializer = EngagementApplicationListSerializer(applications, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def my_engagement_applications_view(request):
+    my_engagement_applications_view.required_employee_types = ['TENANT']
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        applications = EngagementApplication.objects.filter(tenant=tenant).order_by('-semester', 'department__name')
+        serializer = MyEngagementApplicationSerializer(applications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def delete_engagement_application_view(request, app_id):
+    delete_engagement_application_view.required_employee_types = ['TENANT']
+
+    settings = GlobalAppSettings.load()
+    if not settings.applications_open:
+        return Response({"error": "Applications are closed and cannot be modified."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        application = EngagementApplication.objects.get(id=app_id, tenant=tenant)
+        
+        # To prevent deleting old applications, only allow deletion for the upcoming semester.
+        next_semester = get_next_semester(settings.current_semester)
+        if application.semester != next_semester:
+            return Response({"error": "You can only delete applications for the upcoming semester."}, status=status.HTTP_403_FORBIDDEN)
+
+        application.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+    except EngagementApplication.DoesNotExist:
+        return Response({"error": "Application not found or you do not have permission to delete it."}, status=status.HTTP_404_NOT_FOUND)

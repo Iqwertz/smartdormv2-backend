@@ -35,7 +35,9 @@ tenant_urlpatterns = [
     path('my-departure/', tenant_views.my_departure_view, name='my-departure'),
     path('my-departure/decide/', tenant_views.decide_departure_view, name='decide-departure'),
     path('engagement-application/', tenant_views.create_engagement_application_view, name='create-engagement-application'),
+    path('engagement-application/<int:app_id>/delete/', tenant_views.delete_engagement_application_view, name='delete-engagement-application'),
     path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
+    path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
 ]
 
 # Engagement-related URLs
