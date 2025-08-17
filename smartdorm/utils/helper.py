@@ -4,6 +4,7 @@ from decimal import Decimal
 from datetime import date
 import uuid
 import logging
+import re
 
 from django.db import transaction
 from django.db.models import Max
@@ -32,6 +33,22 @@ def checkValidSemesterFormat(semester: str) -> bool:
         if first_year + 1 == second_year:
             return True
     return False
+
+def get_next_semester(current_semester: str) -> str:
+    """Calculates the next academic semester."""
+    ss_match = re.match(r'^SS(\d{2})$', current_semester)
+    if ss_match:
+        year = int(ss_match.group(1))
+        next_year_short = (year + 1) % 100
+        return f"WS{year}/{next_year_short:02d}"
+
+    ws_match = re.match(r'^WS(\d{2})/(\d{2})$', current_semester)
+    if ws_match:
+        end_year = int(ws_match.group(2))
+        return f"SS{end_year:02d}"
+
+    logger.warning(f"Could not determine next semester for unrecognized format: {current_semester}")
+    return ""
 
 def generate_secure_password(length=12):
     """Generates a secure, random password."""

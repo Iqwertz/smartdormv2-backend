@@ -34,6 +34,8 @@ tenant_urlpatterns = [
     path('global-settings/', tenant_views.get_global_settings_view, name='global-settings'),
     path('my-departure/', tenant_views.my_departure_view, name='my-departure'),
     path('my-departure/decide/', tenant_views.decide_departure_view, name='decide-departure'),
+    path('engagement-application/', tenant_views.create_engagement_application_view, name='create-engagement-application'),
+    path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
 ]
 
 # Engagement-related URLs
@@ -41,6 +43,7 @@ engagement_urlpatterns = [
     path('heimrat/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'),
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
+    path('heimrat/set-show-applications/', engagement_views.set_show_applications_view, name='set-show-applications'),
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
 ]
 
@@ -105,6 +108,7 @@ admin_urlpatterns = [
 common_urlpatterns = [
     path('tenant-list/', shared_views.tenants_for_select_view, name='department-tenants-for-select'),
     path('room-list/', shared_views.rooms_for_select_view, name='common-rooms-for-select'),
+    path('departments-for-select/', shared_views.departments_for_select_view, name='common-departments-for-select'),
 ]
 
 urlpatterns = [

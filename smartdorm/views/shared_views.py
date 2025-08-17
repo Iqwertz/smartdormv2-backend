@@ -6,7 +6,8 @@ from rest_framework import status
 from django.utils import timezone
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Room
+from ..models import Tenant, Subtenant, Room, Department
+from ..serializers import DepartmentSerializer
 
 import logging
 
@@ -77,6 +78,24 @@ def tenants_for_select_view(request):
             {"error": "An error occurred while retrieving recipient list for selection."},
              status=status.HTTP_500_INTERNAL_SERVER_ERROR
          )
+        
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def departments_for_select_view(request):
+    """
+    API endpoint to retrieve a list of all departments for select dropdowns.
+    """
+    try:
+        departments = Department.objects.all().order_by('name')
+        serializer = DepartmentSerializer(departments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error retrieving departments for select: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while retrieving department list."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])

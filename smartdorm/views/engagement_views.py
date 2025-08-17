@@ -1,9 +1,10 @@
 #In this file we have all views that are in some way restricted to a engagement role
 from django.http import HttpResponse
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from ..utils.helper import checkValidSemesterFormat
 from ..permissions import GroupAndEmployeeTypePermission
@@ -317,6 +318,38 @@ def set_applications_open_view(request):
         logger.error(f"Error setting applications open status: {e}", exc_info=True)
         return Response(
             {"error": "An error occurred while updating the applications open status."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def set_show_applications_view(request):
+    """
+    API endpoint to set the show_applications status.
+    Requires user to be in 'Heimrat' or 'Netzwerkreferat' group.
+    Expects JSON: {"show_applications": true}
+    """
+    set_show_applications_view.required_groups = ['Heimrat', 'Netzwerkreferat']
+
+    show_applications_status = request.data.get('show_applications')
+    if show_applications_status is None or not isinstance(show_applications_status, bool):
+        return Response(
+            {"error": "Field 'show_applications' is required and must be a boolean (true/false)."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        settings = GlobalAppSettings.load()
+        settings.show_applications = show_applications_status
+        settings.save()
+        serializer = GlobalAppSettingsSerializer(settings)
+        logger.info(f"User '{request.user.username}' updated show_applications to '{show_applications_status}'.")
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error setting show_applications status: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while updating the show_applications status."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         

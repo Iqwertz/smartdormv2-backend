@@ -257,6 +257,10 @@ class GlobalAppSettings(models.Model):
         default=False,
         help_text="Are new applications currently being accepted?"
     )
+    show_applications = models.BooleanField(
+        default=False,
+        help_text="Are engagement applications visible to tenants?"
+    )
     # Example of another setting:
     # site_maintenance_mode = models.BooleanField(default=False, help_text="Is the site in maintenance mode?")
 

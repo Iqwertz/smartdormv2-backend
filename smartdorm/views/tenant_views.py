@@ -4,7 +4,7 @@ from django.contrib.auth import authenticate, login as auth_login, logout as aut
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.middleware.csrf import get_token
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
@@ -22,12 +22,12 @@ from django.utils import timezone
 from collections import defaultdict
 from django.db.models import F
 from django.db import transaction
-
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim
-from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer
-from ..utils.helper import create_and_notify_departure_signatures
+from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
+from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer
+from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
 
 logger = logging.getLogger(__name__)
 
@@ -325,3 +325,75 @@ def decide_departure_view(request):
         return Response({"message": "Departure successfully confirmed."}, status=status.HTTP_200_OK)
 
     return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+@parser_classes([MultiPartParser, FormParser])
+def create_engagement_application_view(request):
+    create_engagement_application_view.required_employee_types = ['TENANT']
+
+    settings = GlobalAppSettings.load()
+    if not settings.applications_open:
+        return Response({"error": "Applications are currently closed."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    next_semester = get_next_semester(settings.current_semester)
+    if not next_semester:
+        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Check for existing application
+    if EngagementApplication.objects.filter(tenant=tenant, semester=next_semester).exists():
+        return Response({"error": f"You have already submitted an application for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
+    
+    data = request.data.copy()
+    serializer = EngagementApplicationCreateSerializer(data=data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    validated_data = serializer.validated_data
+
+    max_id_result = EngagementApplication.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+
+    image_file = request.FILES.get('image')
+
+    try:
+        EngagementApplication.objects.create(
+            id=new_id,
+            external_id=uuid.uuid4().hex,
+            tenant=tenant,
+            semester=next_semester,
+            department=validated_data['department'],
+            motivation=validated_data['motivation'],
+            image=image_file.read() if image_file else None,
+            image_name=image_file.name if image_file else None,
+        )
+        return Response({"message": "Application submitted successfully."}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.error(f"Error creating engagement application for {tenant.username}: {e}", exc_info=True)
+        return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def list_engagement_applications_view(request):
+    settings = GlobalAppSettings.load()
+    if not settings.show_applications:
+        return Response([], status=status.HTTP_200_OK)
+
+    next_semester = get_next_semester(settings.current_semester)
+    if not next_semester:
+        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    applications = EngagementApplication.objects.filter(
+        semester=next_semester
+    ).select_related('tenant', 'department').order_by('department__name', 'tenant__surname')
+
+    serializer = EngagementApplicationListSerializer(applications, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)

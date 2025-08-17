@@ -1,7 +1,8 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication
 from django.utils import timezone
+import base64
 
 class TenantSerializer(serializers.ModelSerializer):
     class Meta:
@@ -82,7 +83,7 @@ class TenantMoveSerializer(serializers.Serializer):
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = ['name', 'full_name']
+        fields = ['name', 'full_name', 'id']
 
 class EngagementSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer(read_only=True)
@@ -113,15 +114,44 @@ class HsvTenantSerializer(serializers.ModelSerializer):
 class GlobalAppSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = GlobalAppSettings
-        fields = ['current_semester', 'applications_open', 'updated_at']
+        fields = ['current_semester', 'applications_open', 'show_applications', 'updated_at']
         read_only_fields = ['updated_at']
 
     def update(self, instance, validated_data):
         instance.current_semester = validated_data.get('current_semester', instance.current_semester)
         instance.applications_open = validated_data.get('applications_open', instance.applications_open)
+        instance.show_applications = validated_data.get('show_applications', instance.show_applications)
         instance.save()
         return instance
     
+class EngagementApplicationCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EngagementApplication
+        # Tenant and semester are set in the view
+        fields = ['department', 'motivation', 'image', 'image_name']
+        extra_kwargs = {
+            'image': {'required': False, 'allow_null': True},
+            'image_name': {'required': False, 'allow_blank': True}
+        }
+
+class TenantForApplicationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tenant
+        fields = ['name', 'surname']
+
+class EngagementApplicationListSerializer(serializers.ModelSerializer):
+    tenant = TenantForApplicationSerializer(read_only=True)
+    department = DepartmentSerializer(read_only=True)
+    image_base64 = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EngagementApplication
+        fields = ['id', 'tenant', 'department', 'motivation', 'image_base64']
+
+    def get_image_base64(self, obj):
+        if obj.image:
+            return base64.b64encode(obj.image).decode('utf-8')
+        return None
 class ParcelCreateRequestSerializer(serializers.Serializer):
     room = serializers.CharField(max_length=255, required=False, allow_blank=True)
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)
