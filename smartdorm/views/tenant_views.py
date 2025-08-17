@@ -4,6 +4,8 @@ from django.contrib.auth import authenticate, login as auth_login, logout as aut
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.middleware.csrf import get_token
+from django.http import HttpResponse, Http404
+from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
@@ -395,10 +397,33 @@ def list_engagement_applications_view(request):
 
     applications = EngagementApplication.objects.filter(
         semester=next_semester
-    ).select_related('tenant', 'department').order_by('department__name', 'tenant__surname')
+    ).select_related('tenant', 'department').defer(
+        'image', 'image_name'  # Dont fetch heavy images, for performance, also image column should be updated some times in the future
+    ).order_by('department__name', 'tenant__surname')
 
-    serializer = EngagementApplicationListSerializer(applications, many=True)
+    serializer = EngagementApplicationListSerializer(applications, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def get_application_image_view(request, app_id):
+    """
+    Serves the image for a specific engagement application.
+    Permissions are checked based on the main list view's logic.
+    """
+    settings = GlobalAppSettings.load()
+    if not settings.show_applications:
+        # If applications aren't visible, tenants shouldn't access images either
+        raise Http404
+
+    application = get_object_or_404(EngagementApplication, id=app_id)
+    if not application.image:
+        raise Http404
+
+    # The content type could be stored in the DB, but for now, jpeg is a safe default.
+    return HttpResponse(application.image, content_type='image/jpeg')
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])

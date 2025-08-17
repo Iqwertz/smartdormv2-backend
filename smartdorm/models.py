@@ -116,7 +116,7 @@ class Engagement(models.Model):
 
 class EngagementApplication(models.Model):
     id = models.IntegerField(primary_key=True)
-    semester = models.CharField(max_length=255)
+    semester = models.CharField(max_length=255) 
     motivation = models.TextField()
     external_id = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.DO_NOTHING, db_column='department_id')

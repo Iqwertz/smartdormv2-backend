@@ -2,6 +2,7 @@
 from rest_framework import serializers
 from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication
 from django.utils import timezone
+from django.urls import reverse
 import base64
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -142,15 +143,22 @@ class TenantForApplicationSerializer(serializers.ModelSerializer):
 class EngagementApplicationListSerializer(serializers.ModelSerializer):
     tenant = TenantForApplicationSerializer(read_only=True)
     department = DepartmentSerializer(read_only=True)
-    image_base64 = serializers.SerializerMethodField()
+    # image_base64 = serializers.SerializerMethodField()  <-- REMOVE THIS
+    image_url = serializers.SerializerMethodField() # <-- ADD THIS
 
     class Meta:
         model = EngagementApplication
-        fields = ['id', 'tenant', 'department', 'motivation', 'image_base64']
+        # fields = ['id', 'tenant', 'department', 'motivation', 'image_base64'] <-- CHANGE THIS
+        fields = ['id', 'tenant', 'department', 'motivation', 'image_url'] # <-- TO THIS
 
-    def get_image_base64(self, obj):
+    def get_image_url(self, obj):
+        # Return a URL to the new image endpoint if an image exists
         if obj.image:
-            return base64.b64encode(obj.image).decode('utf-8')
+            # We will create two different endpoints for tenants and heimrat for permission reasons
+            request = self.context.get('request')
+            if request and 'heimrat' in request.path:
+                 return request.build_absolute_uri(reverse('engagements:heimrat-get-application-image', kwargs={'app_id': obj.id}))
+            return request.build_absolute_uri(reverse('tenants:get-application-image', kwargs={'app_id': obj.id}))
         return None
 
 class MyEngagementApplicationSerializer(serializers.ModelSerializer):

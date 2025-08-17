@@ -7,6 +7,7 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Max
 import uuid
+from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 
@@ -18,6 +19,7 @@ from ..serializers import (
     HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
     EngagementCreateByHeimratSerializer, EngagementPointUpdateSerializer
 )
+from ..utils import ldap_utils
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -378,11 +380,25 @@ def heimrat_list_applications_view(request):
 
     applications = EngagementApplication.objects.filter(
         semester=next_semester
-    ).select_related('tenant', 'department').order_by('department__name', 'tenant__surname')
+    ).select_related('tenant', 'department').defer(
+        'image', 'image_name'  # For speed optimization
+    ).order_by('department__name', 'tenant__surname')
 
-    serializer = EngagementApplicationListSerializer(applications, many=True)
+    serializer = EngagementApplicationListSerializer(applications, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def heimrat_get_application_image_view(request, app_id):
+    """ Serves an application image specifically for Heimrat, bypassing visibility settings. """
+    heimrat_get_application_image_view.required_groups = ['Heimrat', 'ADMIN']
+    
+    application = get_object_or_404(EngagementApplication, id=app_id)
+    if not application.image:
+        raise Http404
+
+    return HttpResponse(application.image, content_type='image/jpeg')
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
@@ -594,3 +610,74 @@ def export_engagement_tenants_csv(request):
         ])
 
     return response
+
+
+def _get_ldap_group_name_from_department(department_full_name):
+    """Transforms a department full name into an LDAP group CN."""
+    # Take first word if there's a space
+    name = department_full_name.split(' ')[0]
+    # Replace Umlauts and make lowercase
+    name = name.lower().replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+    return name
+
+@transaction.atomic
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def update_semester_and_ldap_view(request):
+    """
+    Updates the current semester and synchronizes LDAP groups for the old and new semester engagements.
+    This is a critical, transactional operation.
+    """
+    update_semester_and_ldap_view.required_groups = ['Heimrat', 'ADMIN']
+    
+    new_semester = request.data.get('new_semester')
+    if not new_semester or not checkValidSemesterFormat(new_semester):
+        return Response({"error": "A valid 'new_semester' is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    settings = GlobalAppSettings.load()
+    old_semester = settings.current_semester
+    
+    if new_semester == old_semester:
+        return Response({"message": "Semester is already set to the provided value. No action taken."}, status=status.HTTP_200_OK)
+
+    group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+    ldap_errors = []
+
+    # Remove tenants from old semester's engagement groups
+    old_engagements = Engagement.objects.filter(semester=old_semester).select_related('tenant', 'department')
+    logger.info(f"Found {old_engagements.count()} engagements in old semester '{old_semester}' to process for LDAP group removal.")
+    for eng in old_engagements:
+        if eng.tenant.username:
+            group_cn = _get_ldap_group_name_from_department(eng.department.full_name)
+            group_dn = f"cn={group_cn},{group_base_dn}"
+            success = ldap_utils.remove_user_from_group(eng.tenant.username, group_dn)
+            if not success:
+                ldap_errors.append(f"Failed to remove {eng.tenant.username} from {group_dn}")
+
+    # Add tenants to new semester's engagement groups
+    new_engagements = Engagement.objects.filter(semester=new_semester).select_related('tenant', 'department')
+    logger.info(f"Found {new_engagements.count()} engagements in new semester '{new_semester}' to process for LDAP group addition.")
+    for eng in new_engagements:
+        if eng.tenant.username:
+            group_cn = _get_ldap_group_name_from_department(eng.department.full_name)
+            group_dn = f"cn={group_cn},{group_base_dn}"
+            success = ldap_utils.add_user_to_group(eng.tenant.username, group_dn)
+            if not success:
+                ldap_errors.append(f"Failed to add {eng.tenant.username} to {group_dn}")
+
+    if ldap_errors:
+        # The transaction will be rolled back automatically on exception.
+        logger.error("LDAP synchronization failed. Rolling back transaction. Errors: " + "; ".join(ldap_errors))
+        raise Exception("One or more LDAP operations failed. The semester has not been updated.")
+
+    # Update the semester in the database
+    settings.current_semester = new_semester
+    settings.save()
+    logger.info(f"Successfully updated semester from '{old_semester}' to '{new_semester}' and synchronized LDAP groups.")
+
+    return Response({
+        "message": f"Semester successfully updated to {new_semester}. LDAP groups synchronized.",
+        "removed_from_groups_for_semester": old_semester,
+        "added_to_groups_for_semester": new_semester
+    })
