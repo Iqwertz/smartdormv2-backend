@@ -65,6 +65,66 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
         if 'con' in locals() and con:
             con.unbind_s()
             
+def add_user_to_group(username, group_dn):
+    """Adds an existing LDAP user to a specified LDAP group."""
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        mod_list = [(ldap.MOD_ADD, 'member', [user_dn.encode('utf-8')])]
+        con.modify_s(group_dn, mod_list)
+        logger.info(f"Successfully added LDAP user '{username}' to group '{group_dn}'.")
+        return True
+    except ldap.TYPE_OR_VALUE_EXISTS:
+        logger.warning(f"User '{username}' is already a member of group '{group_dn}'. No action needed.")
+        return True
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to add user to group: Group '{group_dn}' or user '{user_dn}' does not exist.")
+        return True
+    except ldap.LDAPError as e:
+        logger.error(f"Failed to add user '{username}' to group '{group_dn}': {e}")
+        return False
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def remove_user_from_group(username, group_dn):
+    """Removes an LDAP user from a specified LDAP group."""
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        mod_list = [(ldap.MOD_DELETE, 'member', [user_dn.encode('utf-8')])]
+        con.modify_s(group_dn, mod_list)
+        logger.info(f"Successfully removed LDAP user '{username}' from group '{group_dn}'.")
+        return True
+    except ldap.NO_SUCH_ATTRIBUTE:
+        logger.warning(f"User '{username}' was not a member of group '{group_dn}'. No action needed.")
+        return True
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to remove user from group: Group '{group_dn}' or user '{user_dn}' does not exist.")
+        return True
+    except ldap.LDAPError as e:
+        logger.error(f"Failed to remove user '{username}' from group '{group_dn}': {e}")
+        return False
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+            
 def delete_ldap_user(username):
     """
     Deletes a user from the LDAP directory.
