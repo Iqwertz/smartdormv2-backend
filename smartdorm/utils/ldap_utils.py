@@ -153,3 +153,34 @@ def delete_ldap_user(username):
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
+
+def update_ldap_password(username, new_password):
+    """
+    Updates the password of an existing LDAP user.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # Update the user's password
+        mod_list = [(ldap.MOD_REPLACE, 'userPassword', [new_password.encode('utf-8')])]
+        con.modify_s(user_dn, mod_list)
+        logger.info(f"Successfully updated password for LDAP user: {username}")
+        return True
+
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to update password: User '{username}' does not exist in LDAP.")
+        raise ValueError(f"User '{username}' does not exist in LDAP.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during password update for '{username}': {e}")
+        raise ConnectionError(f"Could not update password in the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
