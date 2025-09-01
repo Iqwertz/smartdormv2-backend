@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from pprint import pprint
 from django.contrib.auth.models import User
+from ..models import Tenant
 from ..utils.email_utils import send_email_message
 from ..utils.ldap_utils import update_ldap_password
 import logging
@@ -112,6 +113,13 @@ def password_reset_view(request):
         # Find user by email
         try:
             user = User.objects.get(email=email)
+            
+            try:
+                tenant = Tenant.objects.get(email=email)
+                greeting = tenant.name  
+            except Tenant.DoesNotExist:
+                greeting = user.username  # Fallback
+                
         except User.DoesNotExist:
             # Don't reveal if email exists or not for security
             return Response(
@@ -131,7 +139,7 @@ def password_reset_view(request):
 
         # Send email with new password
         email_context = {
-            'greeting': user.first_name or user.username,
+            'greeting': greeting,
             'username': user.username,
             'password': new_password,
         }
