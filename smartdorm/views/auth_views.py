@@ -200,6 +200,12 @@ def password_change_view(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        if old_password == new_password:
+            return Response(
+                {"success": False, "message": "Das neue Passwort muss sich vom aktuellen Passwort unterscheiden."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Verify old password
         user = authenticate(request, username=request.user.username, password=old_password)
         if user is None:
