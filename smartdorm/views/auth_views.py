@@ -169,6 +169,67 @@ def password_reset_view(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def password_change_view(request):
+    """
+    Change password for authenticated user.
+    Requires old password verification and new password confirmation.
+    """
+    try:
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        confirm_password = request.data.get('confirm_password')
+        
+        if not old_password or not new_password or not confirm_password:
+            return Response(
+                {"success": False, "message": "Alle Felder sind erforderlich."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if new_password != confirm_password:
+            return Response(
+                {"success": False, "message": "Die neuen Passwörter stimmen nicht überein."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if len(new_password) < 8:
+            return Response(
+                {"success": False, "message": "Das neue Passwort muss mindestens 8 Zeichen lang sein."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify old password
+        user = authenticate(request, username=request.user.username, password=old_password)
+        if user is None:
+            return Response(
+                {"success": False, "message": "Das aktuelle Passwort ist falsch."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update password in LDAP
+        try:
+            update_ldap_password(request.user.username, new_password)
+            logger.info(f"Password successfully changed for user: {request.user.username}")
+            return Response(
+                {"success": True, "message": "Passwort erfolgreich geändert."}, 
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            logger.error(f"Failed to update LDAP password for user {request.user.username}: {e}")
+            return Response(
+                {"success": False, "message": "Fehler beim Ändern des Passworts. Bitte versuchen Sie es später erneut."}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+    except Exception as e:
+        logger.error(f"Password change error: {e}")
+        return Response(
+            {"success": False, "message": "Ein Fehler ist aufgetreten."}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 # --- Example Protected View ---
 #
 # Tenant dashboard: Specific groups and employee type

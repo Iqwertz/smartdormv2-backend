@@ -17,6 +17,7 @@ auth_urlpatterns = [
     path('logout/', auth_views.logout_view, name='api-logout'),
     path('me/', auth_views.me_view, name='api-me'),
     path('password-reset/', auth_views.password_reset_view, name='api-password-reset'),
+    path('password-change/', auth_views.password_change_view, name='api-password-change'),
 ]
 
 # Parcel-related URLs
