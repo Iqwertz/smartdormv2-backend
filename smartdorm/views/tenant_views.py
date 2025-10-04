@@ -25,6 +25,7 @@ from django.utils import timezone
 from collections import defaultdict
 from django.db.models import F
 from django.db import transaction
+from django.core.cache import cache
 from rest_framework.parsers import MultiPartParser, FormParser
 
 
@@ -451,12 +452,26 @@ def get_application_image_view(request, app_id):
         # If applications aren't visible, tenants shouldn't access images either
         raise Http404
 
+    cache_key = f"appimg:{app_id}"
+    cached_bytes = cache.get(cache_key)
+    if cached_bytes:
+        resp = HttpResponse(cached_bytes, content_type='image/jpeg')
+        resp['Cache-Control'] = 'public, max-age=5184000, immutable'
+        return resp
+
     application = get_object_or_404(EngagementApplication, id=app_id)
     if not application.image:
         raise Http404
 
-    # The content type could be stored in the DB, but for now, jpeg is a safe default.
-    return HttpResponse(application.image, content_type='image/jpeg')
+    img_bytes = application.image.tobytes() if hasattr(application.image, 'tobytes') else bytes(application.image)
+    try:
+        cache.set(cache_key, img_bytes, timeout=5184000)
+    except Exception:
+        pass
+    resp = HttpResponse(img_bytes, content_type='image/jpeg')
+    resp['Cache-Control'] = 'public, max-age=5184000, immutable'
+    return resp
+    
 
 
 @api_view(['GET'])
