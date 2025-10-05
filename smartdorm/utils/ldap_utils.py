@@ -153,3 +153,74 @@ def delete_ldap_user(username):
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
+
+def update_ldap_password(username, new_password):
+    """
+    Updates the password of an existing LDAP user.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # Update the user's password
+        mod_list = [(ldap.MOD_REPLACE, 'userPassword', [new_password.encode('utf-8')])]
+        con.modify_s(user_dn, mod_list)
+        logger.info(f"Successfully updated password for LDAP user: {username}")
+        return True
+
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to update password: User '{username}' does not exist in LDAP.")
+        raise ValueError(f"User '{username}' does not exist in LDAP.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during password update for '{username}': {e}")
+        raise ConnectionError(f"Could not update password in the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def find_ldap_user_by_email(email):
+    """
+    Finds an LDAP user by email address.
+    Returns (username, full_name) if found, (None, None) if not found.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # Search for user by email
+        search_filter = f"(mail={email})"
+        result = con.search_s(user_base_dn, ldap.SCOPE_SUBTREE, search_filter, ['cn', 'givenName', 'sn'])
+        
+        if result:
+            # Extract username and full name from LDAP result
+            dn, attrs = result[0]
+            username = attrs['cn'][0].decode('utf-8') if 'cn' in attrs else None
+            first_name = attrs['givenName'][0].decode('utf-8') if 'givenName' in attrs else ""
+            last_name = attrs['sn'][0].decode('utf-8') if 'sn' in attrs else ""
+            full_name = f"{first_name} {last_name}".strip()
+            
+            logger.info(f"Found LDAP user by email '{email}': username='{username}', name='{full_name}'")
+            return username, full_name
+        else:
+            logger.info(f"No LDAP user found with email '{email}'")
+            return None, None
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during email search for '{email}': {e}")
+        raise ConnectionError(f"Could not search LDAP for email '{email}': {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
