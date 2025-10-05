@@ -179,6 +179,15 @@ CSRF_TRUSTED_ORIGINS = [
     "https://smartdormv2-dev.schollheim.net",
 ]
 
+SESSION_COOKIE_DOMAIN = ".schollheim.net"
+CSRF_COOKIE_DOMAIN = ".schollheim.net"
+
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+CSRF_COOKIE_HTTPONLY = False
+SESSION_COOKIE_HTTPONLY = True
+
 # --- Logging Configuration ---
 LOGGING = {
     'version': 1,
