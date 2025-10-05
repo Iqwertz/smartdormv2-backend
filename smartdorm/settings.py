@@ -5,7 +5,8 @@ from django_auth_ldap.config import LDAPSearch, LDAPSearchUnion, GroupOfNamesTyp
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY")
-DEBUG = False if os.environ.get("PRODUCTION") else True
+PRODUCTION_MODE = os.environ.get("PRODUCTION", "false").lower() in ("true", "1", "yes")
+DEBUG = not PRODUCTION_MODE
 
 ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', 'smartdormv2-api-dev.schollheim.net']
 
@@ -106,10 +107,10 @@ CACHES = {
 }
 
 # --- CORS Configuration ---
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://localhost:5173$",
-    r"^http://127\.0\.0\.1:5173$",
-    r"^https?://(.+\.)?schollheim\.net$",
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://smartdormv2-api-dev.schollheim.net"
 ]
 CORS_ALLOW_CREDENTIALS = True # Important for cookies/sessions
 
