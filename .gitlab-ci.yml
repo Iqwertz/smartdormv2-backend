@@ -24,7 +24,7 @@ deploy_to_development:
     name: development
   <<: *deploy_definition
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" && $CI_MERGE_REQUEST_STATE == "merged"'
+    - if: '$CI_COMMIT_BRANCH == "development"'
 
 deploy_to_production:
   stage: deploy
