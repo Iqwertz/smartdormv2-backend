@@ -55,6 +55,7 @@ engagement_urlpatterns = [
     path('heimrat/engagements/create/', engagement_views.create_engagement_admin_view, name='admin-create-engagement'),
     path('heimrat/engagements/<int:engagement_id>/update-points/', engagement_views.update_engagement_points_view, name='admin-update-engagement-points'),
     path('heimrat/engagements/<int:engagement_id>/delete/', engagement_views.delete_engagement_view, name='admin-delete-engagement'),
+    path('heimrat/engagements/<int:engagement_id>/toggle-compensate/', engagement_views.toggle_engagement_compensate_view, name='admin-toggle-engagement-compensate'),
     path('heimrat/engagements/compensate-all/', engagement_views.compensate_all_engagements_view, name='admin-compensate-all'),
 
     # Settings for Heimrat
