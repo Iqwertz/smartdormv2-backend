@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY")
 DEBUG = False if os.environ.get("PRODUCTION") else True
 
-ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', 'smartdormv2-api-dev.schollheim.net']
 
 INSTALLED_APPS = [
     'django.contrib.admin',

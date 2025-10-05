@@ -14,13 +14,9 @@ if ! redis-cli ping > /dev/null 2>&1; then
 fi
 echo "Redis connection successful."
 
-# Load environment variables from .env file
-if [ -f .env ]; then
-  source .env
-else
-  echo "Error: .env file not found"
-  exit 1
-fi
+
+
+
 
 # Export environment variables for Django
 export DB_PASSWORD

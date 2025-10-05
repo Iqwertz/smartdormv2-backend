@@ -18,3 +18,4 @@ Pillow
 reportlab
 python-dateutil
 pypdf
+requests
