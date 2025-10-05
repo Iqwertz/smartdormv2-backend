@@ -14,7 +14,7 @@ from pprint import pprint
 from django.contrib.auth.models import User
 from ..models import Tenant
 from ..utils.email_utils import send_email_message
-from ..utils.ldap_utils import update_ldap_password
+from ..utils.ldap_utils import update_ldap_password, find_ldap_user_by_email
 import logging
 
 logger = logging.getLogger(__name__)
@@ -106,32 +106,40 @@ def password_reset_view(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Generate a secure 12-character password
-        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-        new_password = ''.join(secrets.choice(alphabet) for _ in range(12))
-
-        # Find user by email
+        # Find user by email in LDAP 
         try:
-            user = User.objects.get(email=email)
+            username, full_name = find_ldap_user_by_email(email)
+            if not username:
+                # Don't reveal if email exists or not for security
+                return Response(
+                    {"success": True, "message": "Falls die E-Mail-Adresse existiert, wurde eine Passwort-Reset-E-Mail gesendet."}, 
+                    status=status.HTTP_200_OK
+                )
             
+            # Try to get greeting from Tenant model, fallback to LDAP full_name
             try:
                 tenant = Tenant.objects.get(email=email)
                 greeting = tenant.name  
             except Tenant.DoesNotExist:
-                greeting = user.username  # Fallback
+                greeting = full_name or username  # Fallback to LDAP data
                 
-        except User.DoesNotExist:
+        except Exception as e:
+            logger.error(f"Error during LDAP user search for email '{email}': {e}")
             # Don't reveal if email exists or not for security
             return Response(
-                {"success": True, "message": "If the email address exists, a password reset email has been sent."}, 
+                {"success": True, "message": "Falls die E-Mail-Adresse existiert, wurde eine Passwort-Reset-E-Mail gesendet."}, 
                 status=status.HTTP_200_OK
             )
 
+        # Generate a secure 12-character password (only after LDAP user was found)
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        new_password = ''.join(secrets.choice(alphabet) for _ in range(12))
+
         # Update password in LDAP
         try:
-            update_ldap_password(user.username, new_password)
+            update_ldap_password(username, new_password)
         except Exception as e:
-            logger.error(f"Failed to update LDAP password for user {user.username}: {e}")
+            logger.error(f"Failed to update LDAP password for user {username}: {e}")
             return Response(
                 {"success": False, "message": "Failed to reset password. Please contact support."}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -140,7 +148,7 @@ def password_reset_view(request):
         # Send email with new password
         email_context = {
             'greeting': greeting,
-            'username': user.username,
+            'username': username,
             'password': new_password,
         }
 
@@ -153,7 +161,7 @@ def password_reset_view(request):
 
         if email_sent:
             return Response(
-                {"success": True, "message": "Password reset email sent successfully."}, 
+                {"success": True, "message": "Passwort-Reset-E-Mail erfolgreich gesendet."}, 
                 status=status.HTTP_200_OK
             )
         else:
