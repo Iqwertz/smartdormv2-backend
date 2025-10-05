@@ -18,7 +18,7 @@ import logging
 import uuid
 from smartdorm.serializers import TenantSerializer, EngagementSerializer, HsvTenantSerializer
 from ..models import Engagement
-from ..utils import email_utils
+from ..utils import email_utils, pdf_utils
 from .. import config as app_config
 from django.db.models import Prefetch, Max
 from django.utils import timezone  
@@ -273,15 +273,31 @@ def decide_departure_view(request):
             created_on=timezone.now().date()
         )
         
+        pdf_data = pdf_utils.prepare_extension_application_pdf_data(tenant)
+        
         # Send email notification to the department
         email_utils.send_email_message(
             recipient_list=[app_config.DEPARTMENT_EMAIL],
             subject=f"{tenant.name} {tenant.surname} möchte verlängern",
-            html_template_name='email/tenant-departure-postponement.html',
+            html_template_name='email/management-departure-postponement.html',
             context={
                 'name': f"{tenant.name} {tenant.surname}",
                 'room': tenant.current_room if tenant.current_room else 'Unbekannt',
             }
+        )
+        
+        #Send email to tenant
+        email_utils.send_email_message(
+            recipient_list=[tenant.email],
+            subject=f"Wohnzeitverlängerungsbewerbung",
+            html_template_name='email/tenant-departure-postponement.html',
+            context={
+                'name': f"{tenant.name} {tenant.surname}",
+                'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+            },
+            dynamic_pdf_template_path='pdf/Wohnzeitverlaengerung-Bewerbungsformular.pdf',
+            dynamic_pdf_data=pdf_data,
+            dynamic_pdf_filename=f"Antrag_Wohnzeitverlaengerung_{tenant.surname}.pdf"
         )
 
         return Response({"message": "Departure successfully postponed."}, status=status.HTTP_200_OK)

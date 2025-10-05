@@ -5,6 +5,9 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 import logging
 
+# Import the new PDF utility
+from . import pdf_utils
+
 logger = logging.getLogger(__name__)
 
 ATTACHMENTS_BASE_DIR = os.path.join(settings.BASE_DIR, 'smartdorm', 'static')
@@ -19,7 +22,10 @@ def send_email_message(
     text_template_name=None, # Optional: if not provided, text will be stripped from HTML
     context=None,
     attachment_paths=None,
-    from_email=None
+    from_email=None,
+    dynamic_pdf_template_path=None,
+    dynamic_pdf_data=None,
+    dynamic_pdf_filename=None 
 ):
     """
     Sends an email using HTML and optionally plain text templates.
@@ -36,7 +42,9 @@ def send_email_message(
                                            Paths are relative to ATTACHMENTS_BASE_DIR.
                                            (e.g., ['pdfs/report.pdf', 'images/logo.png'])
         from_email (str, optional): The sender's email address. Defaults to DEFAULT_FROM_EMAIL.
-
+        dynamic_pdf_template_path (str, optional): Path to a PDF form template.
+        dynamic_pdf_data (dict, optional): Data to fill the PDF form fields.
+        dynamic_pdf_filename (str, optional): The filename for the generated PDF attachment.
     Returns:
         bool: True if the email was sent successfully, False otherwise.
     """
@@ -74,7 +82,20 @@ def send_email_message(
         )
         email.attach_alternative(html_content, "text/html") # Attach HTML version
 
-        # Add attachments
+        # Add dynamic PDF attachment if specified
+        if dynamic_pdf_template_path and dynamic_pdf_data and dynamic_pdf_filename:
+            pdf_buffer = pdf_utils.fill_pdf_form(dynamic_pdf_template_path, dynamic_pdf_data)
+            if pdf_buffer:
+                email.attach(
+                    dynamic_pdf_filename,
+                    pdf_buffer.getvalue(),
+                    'application/pdf'
+                )
+                logger.info(f"Successfully attached dynamic PDF '{dynamic_pdf_filename}' to email.")
+            else:
+                logger.warning(f"Could not generate or attach dynamic PDF for template: {dynamic_pdf_template_path}")
+
+        # Add static attachments
         if attachment_paths:
             for rel_path in attachment_paths:
                 full_path = os.path.join(ATTACHMENTS_BASE_DIR, rel_path)

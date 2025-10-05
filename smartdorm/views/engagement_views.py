@@ -6,13 +6,14 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Max
+from django.db.models import Max, Sum
 import uuid
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 
 from ..utils.helper import checkValidSemesterFormat, get_next_semester
+from ..utils.email_utils import send_email_message
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant, Department
 from ..serializers import (
@@ -541,6 +542,19 @@ def create_engagement_admin_view(request):
         points=department.points
     )
     
+    # Send email to tenant about new engagement
+    tenant = Tenant.objects.get(id=data['tenant_id'])
+    
+    send_email_message(
+            recipient_list=[tenant.email],
+            subject=f'Dein Amt {department.name}',
+            html_template_name='email/tenant-engagement-creation.html',
+            context={
+                'greeting': tenant.name,
+                'department': department.full_name,
+                'semester': data['semester'],
+            }
+    )
     response_serializer = AdminEngagementListSerializer(engagement)
     return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -573,16 +587,97 @@ def delete_engagement_view(request, engagement_id):
     engagement.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def toggle_engagement_compensate_view(request, engagement_id):
+    """ Toggles the compensation status of a single engagement. """
+    toggle_engagement_compensate_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    engagement = get_object_or_404(
+        Engagement.objects.select_related('tenant', 'department'), 
+        id=engagement_id
+    )
+
+    was_compensated_before = engagement.compensate
+    new_compensate_status = not was_compensated_before
+
+    engagement.compensate = new_compensate_status
+    engagement.save()
+
+    tenant = engagement.tenant
+    
+    # Recalculate tenant's total compensated points
+    total_points = Engagement.objects.filter(
+        tenant=tenant, compensate=True
+    ).aggregate(total=Sum('points'))['total'] or 0
+    
+    tenant.current_points = total_points
+    tenant.save()
+
+    # Send email only when an engagement is marked as compensated
+    if new_compensate_status:
+        department = engagement.department
+        send_email_message(
+            recipient_list=[tenant.email],
+            subject=f'Referatsentlastung {department.name}',
+            html_template_name='email/tenant-engagement-compensation.html',
+            context={
+                'greeting': tenant.name,
+                'department': department.full_name,
+                'semester': engagement.semester,
+                'points': engagement.points,
+                'totalPoints': total_points
+            }
+        )
+
+    return Response({"message": f"Engagement compensation status updated to {new_compensate_status}."})
+
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 @transaction.atomic
 def compensate_all_engagements_view(request):
-    """ Sets all uncompensated engagements to compensated. """
+    """ Sets all uncompensated engagements to compensated and sends a mail to every tenant that had an engagement compensated. """
     compensate_all_engagements_view.required_groups = HEIMRAT_INFO_GROUPS
     
-    updated_count = Engagement.objects.filter(compensate=False).update(compensate=True)
+    # Find all engagements that are not yet compensated
+    engagements_to_compensate = Engagement.objects.filter(compensate=False).select_related('tenant', 'department')
+    
+    engagements_list = list(engagements_to_compensate)
+    updated_count = len(engagements_list)
+    
+    # Update the engagements in the database
+    if updated_count > 0:
+        engagement_ids = [eng.id for eng in engagements_list]
+        Engagement.objects.filter(id__in=engagement_ids).update(compensate=True)
+
+    # Notify tenants about their newly compensated engagements and update their total points
+    for engagement in engagements_list:
+        tenant = engagement.tenant
+        department = engagement.department
+        tenant_total_points = Engagement.objects.filter(tenant=tenant, compensate=True).aggregate(total=Sum('points'))['total'] or 0
+        #Update the tenant total points in the tenant model
+        tenant.current_points = tenant_total_points
+        tenant.save()
+        #Send the email to the tenant
+        send_email_message(
+            recipient_list=[tenant.email],
+            subject=f'Referatsentlastung {department.name}',
+            html_template_name='email/tenant-engagement-compensation.html',
+            context={
+                'greeting': tenant.name,
+                'department': department.full_name,
+                'semester': engagement.semester,
+                'points': engagement.points,
+                'totalPoints': tenant_total_points
+            }
+        )
+
     return Response({"message": f"{updated_count} engagement(s) successfully compensated."})
+
+
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])

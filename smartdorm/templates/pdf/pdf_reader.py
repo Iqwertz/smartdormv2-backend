@@ -2,7 +2,7 @@
 
 from PyPDF2 import PdfReader
 
-reader = PdfReader("departure-template.pdf")
+reader = PdfReader("Wohnzeitende-Mitteilung.pdf")
 fields = reader.get_fields()
 for field_name, field_info in fields.items():
     print(field_name, field_info)

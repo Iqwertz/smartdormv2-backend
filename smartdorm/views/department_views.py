@@ -17,7 +17,7 @@ from dateutil.relativedelta import relativedelta
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
-from ..utils import ldap_utils, email_utils
+from ..utils import ldap_utils, email_utils, pdf_utils
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
 from .. import config as app_config
 
@@ -649,6 +649,12 @@ def create_departure_view(request):
     )
     serializer = DepartureSerializer(departure)
     
+    pdf_data = {
+        'Bewohnername': tenant.name + " " + tenant.surname,
+        'Wohnzeitende': tenant.move_out.strftime('%d.%m.%Y'),
+        'Zimmernummer Bewohner': tenant.current_room or "N/A",
+    }
+
     #Send email to tenant
     email_utils.send_email_message(
         recipient_list=[tenant.email],
@@ -657,7 +663,10 @@ def create_departure_view(request):
         context={
             'greeting': tenant.name,
             'departureDate': tenant.move_out.strftime('%d.%m.%Y'),
-        }
+        },
+        dynamic_pdf_template_path='pdf/Wohnzeitende-Mitteilung.pdf',
+        dynamic_pdf_data=pdf_data,
+        dynamic_pdf_filename=f"Wohnzeitende-Mitteilung_{tenant.surname}.pdf"
     )
     
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -696,6 +705,12 @@ def send_departure_reminder_view(request, departure_id):
     if departure.status != Departure.Status.CREATED:
         return Response({"error": "Can only send reminders for open departure requests."}, status=status.HTTP_400_BAD_REQUEST)
 
+    pdf_data = {
+        'Bewohnername': departure.tenant.name + " " + departure.tenant.surname,
+        'Wohnzeitende': departure.tenant.move_out.strftime('%d.%m.%Y'),
+        'Zimmernummer Bewohner': departure.tenant.current_room or "N/A",
+    }
+
     #Send email to tenant
     email_sent = email_utils.send_email_message(
         recipient_list=[departure.tenant.email],
@@ -704,7 +719,10 @@ def send_departure_reminder_view(request, departure_id):
         context={
             'greeting': departure.tenant.name,
             'departureDate': departure.tenant.move_out.strftime('%d.%m.%Y'),
-        }
+        },
+        dynamic_pdf_template_path='pdf/Wohnzeitende-Mitteilung.pdf',
+        dynamic_pdf_data=pdf_data,
+        dynamic_pdf_filename=f"Wohnzeitende-Mitteilung_{departure.tenant.surname}.pdf"
     )
 
     if email_sent:
@@ -797,6 +815,10 @@ def send_claim_reminder_view(request, claim_id):
     if claim.status != Claim.Status.CREATED:
         return Response({"error": "Can only send reminders for open claims."}, status=status.HTTP_400_BAD_REQUEST)
 
+    tenant = claim.tenant
+
+    pdf_data = pdf_utils.prepare_extension_application_pdf_data(tenant)
+    
     email_sent = email_utils.send_email_message(
         recipient_list=[claim.tenant.email],
         subject="Erinnerung: Dein Antrag auf Wohnzeitverlängerung",
@@ -805,11 +827,14 @@ def send_claim_reminder_view(request, claim_id):
             'greeting': claim.tenant.name,
             'departureDateMinus3Months': (claim.tenant.move_out - timedelta(days=90)).strftime('%d.%m.%Y'),
             'departureDate': claim.tenant.move_out.strftime('%d.%m.%Y'),
-        }
+        },
+        dynamic_pdf_template_path='pdf/Wohnzeitverlaengerung-Bewerbungsformular.pdf',
+        dynamic_pdf_data=pdf_data,
+        dynamic_pdf_filename=f"Antrag_Wohnzeitverlaengerung_{tenant.surname}.pdf"
     )
 
     if email_sent:
-        return Response({"message": "Reminder email sent successfully."}, status=status.HTTP_200_OK)
+        return Response({"message": "Reminder email with application form sent successfully."}, status=status.HTTP_200_OK)
     return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
