@@ -5,6 +5,7 @@ from django_auth_ldap.config import LDAPSearch, LDAPSearchUnion, GroupOfNamesTyp
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY")
+LOCAL_ENV = os.environ.get("LOCAL_ENV", "false").lower() in ("true", "1", "yes")
 PRODUCTION_MODE = os.environ.get("PRODUCTION", "false").lower() in ("true", "1", "yes")
 DEBUG = not PRODUCTION_MODE
 
@@ -179,14 +180,15 @@ CSRF_TRUSTED_ORIGINS = [
     "https://smartdormv2-dev.schollheim.net",
 ]
 
-SESSION_COOKIE_DOMAIN = ".schollheim.net"
-CSRF_COOKIE_DOMAIN = ".schollheim.net"
+if not LOCAL_ENV:
+    SESSION_COOKIE_DOMAIN = ".schollheim.net"
+    CSRF_COOKIE_DOMAIN = ".schollheim.net"
 
-SESSION_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    CSRF_COOKIE_SAMESITE = 'Lax'
 
-CSRF_COOKIE_HTTPONLY = False
-SESSION_COOKIE_HTTPONLY = True
+    CSRF_COOKIE_HTTPONLY = False
+    SESSION_COOKIE_HTTPONLY = True
 
 # --- Logging Configuration ---
 LOGGING = {
