@@ -13,9 +13,10 @@ import uuid
 from django.shortcuts import get_object_or_404
 from decimal import Decimal, InvalidOperation
 from dateutil.relativedelta import relativedelta
+import re
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim
+from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
@@ -393,7 +394,7 @@ def create_subtenant_view(request):
         'username': username, 'password': password,
     }
     email_sent = email_utils.send_email_message(
-        recipient_list=[data['email']], subject="Dein SmartDorm Zugang als Untermieter",
+        recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
         html_template_name='email/user-account-creation-subtenant.html',
         context=email_context
     )
@@ -824,6 +825,36 @@ def close_departure_view(request, departure_id):
 
     return Response({"message": "Departure successfully closed."}, status=status.HTTP_200_OK)
 
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def download_departure_pdf_view(request, departure_id):
+    """
+    Generates and serves a PDF document for a closed departure,
+    summarizing all departmental signatures and financial details.
+    """
+    download_departure_pdf_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    download_departure_pdf_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    departure = get_object_or_404(
+        Departure.objects.select_related('tenant'),
+        tenant_id=departure_id
+    )
+
+    # Ensure the PDF can only be generated for departures that are fully processed
+    if departure.status != Departure.Status.CLOSED:
+        return Response(
+            {"error": "PDF can only be generated for closed departures."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    pdf_buffer = pdf_utils.generate_departure_pdf(departure)
+    
+    # Sanitize tenant name for the filename
+    tenant_name_kebab = re.sub(r'[^a-zA-Z0-9-]', '', departure.tenant.get_full_name().replace(' ', '-'))
+    filename = f"Auszug-{tenant_name_kebab}.pdf"
+
+    return HttpResponse(pdf_buffer, content_type='application/pdf', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
 # --- Claim (Extension) Views ---
 

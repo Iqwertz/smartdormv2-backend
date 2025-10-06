@@ -82,6 +82,7 @@ departure_management_urlpatterns = [
     path('list/', department_views.list_departures_view, name='departure-list'),
     path('<int:departure_id>/remind/', department_views.send_departure_reminder_view, name='departure-remind'),
     path('<int:departure_id>/close/', department_views.close_departure_view, name='departure-close'),
+    path('<int:departure_id>/download-pdf/', department_views.download_departure_pdf_view, name='departure-download-pdf'),
 ]
 
 department_signature_urlpatterns = [

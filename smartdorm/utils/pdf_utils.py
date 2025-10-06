@@ -3,9 +3,17 @@ import os
 import logging
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import NameObject
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_RIGHT
 from django.conf import settings
 from collections import defaultdict
-from ..models import Tenant, Engagement, Rental
+from ..models import Tenant, Engagement, Rental, Departure, DepositBank
 from .. import config as app_config
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
@@ -15,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Base directory where PDF templates are stored
 PDF_TEMPLATES_BASE_DIR = os.path.join(settings.BASE_DIR, 'smartdorm', 'templates')
+# Base directory for static assets like images
+STATIC_ASSETS_BASE_DIR = os.path.join(settings.BASE_DIR, 'smartdorm', 'static')
 
 def fill_pdf_form(template_path: str, data_dict: dict) -> io.BytesIO | None:
     """
@@ -128,3 +138,114 @@ def prepare_extension_application_pdf_data(tenant: Tenant) -> dict:
         pdf_data[f'PunkteRow{row_num}'] = str(data['points'])
         
     return pdf_data
+
+
+
+def generate_departure_pdf(departure: Departure) -> io.BytesIO:
+    """
+    Generates a departure PDF document for a tenant, summarizing debts and bank details.
+
+    Args:
+        departure (Departure): The departure object containing tenant and signature info.
+
+    Returns:
+        io.BytesIO: An in-memory bytes buffer containing the generated PDF.
+    """
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=inch, leftMargin=inch, topMargin=inch, bottomMargin=inch)
+    story = []
+    styles = getSampleStyleSheet()
+
+    # --- Logo ---
+    # Assumes the logo is located at smartdorm/static/img/schollheim_logo.png
+    logo_path = os.path.join(STATIC_ASSETS_BASE_DIR, 'img', 'logo-black.png')
+    if os.path.exists(logo_path):
+        logo = Image(logo_path, width=1.25*inch, height=1.25*inch)
+        logo.hAlign = 'RIGHT'
+        story.append(logo)
+        story.append(Spacer(1, 0.25 * inch))
+
+    # --- Header ---
+    story.append(Paragraph(
+        "Heimselbstverwaltung des Studentenwohnheims Geschwister Scholl",
+        ParagraphStyle('Header', parent=styles['h1'], fontSize=16, leading=20)
+    ))
+    story.append(Spacer(1, 0.2 * inch))
+
+    # --- Introductory Text ---
+    tenant = departure.tenant
+    tenant_greeting = "die unten genannte Bewohnerin" if tenant.gender == "Female" else "den unten genannten Bewohner"
+    story.append(Paragraph(
+        f"Hiermit bestätigen wir, dass die Heimselbstverwaltung folgende Forderungen gegen {tenant_greeting} hat.",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 0.2 * inch))
+
+    # --- Tenant Details ---
+    story.append(Paragraph(
+        f"<b>{tenant.get_full_name()} (Zimmer {tenant.current_room}). Auszugsdatum: {tenant.move_out.strftime('%d.%m.%Y')}</b>",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 0.3 * inch))
+
+    # --- Signatures Table ---
+    signatures = departure.departmentsignature_set.all().order_by('department_name')
+    table_data = [
+        ["Referat", "Unterschrift am", "Betrag"]
+    ]
+    for sig in signatures:
+        table_data.append([
+            sig.department_name,
+            sig.signed_on.strftime('%d.%m.%Y'),
+            f"{sig.amount} Euro"
+        ])
+
+    sig_table = Table(table_data, colWidths=[2.5*inch, 2*inch, 1.5*inch])
+    sig_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#CCCCCC')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    story.append(sig_table)
+    story.append(Spacer(1, 0.4 * inch))
+
+    # --- Deposit and Bank Info ---
+    story.append(Paragraph(
+        f"Hinterlegte Kaution: {tenant.deposit} Euro.",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 0.3 * inch))
+
+    try:
+        bank_details = DepositBank.objects.get(tenant=tenant)
+        iban = bank_details.iban
+        account_holder = bank_details.name
+    except DepositBank.DoesNotExist:
+        iban = "Nicht verfügbar"
+        account_holder = "Nicht verfügbar"
+
+    bank_table_data = [
+        ['IBAN:', iban],
+        ['Kontoinhaber:', account_holder]
+    ]
+
+    bank_table = Table(bank_table_data, colWidths=[1.5*inch, 4.5*inch])
+    bank_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(bank_table)
+
+    # --- Build PDF ---
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
