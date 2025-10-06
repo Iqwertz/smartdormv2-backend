@@ -380,6 +380,10 @@ def create_subtenant_view(request):
             tenant_id=data['tenant_id'], room_id=data['room_id'],
             university_confirmation=data['university_confirmation']
         )
+        
+        # Update the main tenant's sublet count and adjust dates
+        update_tenant_data_from_subtenant_change(subtenant)
+            
     except Exception as e:
         logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
         return Response({"error": "Failed to save subtenant to database after creating auth entry."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -459,8 +463,30 @@ def update_subtenant_view(request, subtenant_id):
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
+        # Update the main tenant's sublet count and adjust dates if relevant fields changed
+        update_tenant_data_from_subtenant_change(subtenant)
         return Response(SubtenantSerializer(subtenant).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+def update_tenant_data_from_subtenant_change(subtenant):
+    """
+    Updates the main tenant's sublet count and adjusts move_out and probation_end dates
+    based on the current subtenants with university confirmation.
+    """
+    main_tenant = get_object_or_404(Tenant, id=subtenant.tenant_id)
+    
+    # Calculate the sublets and the sublet duration from all sublets of the tenant that have a university confirmation
+    sublets = Subtenant.objects.filter(tenant_id=main_tenant.id, university_confirmation=True)
+    main_tenant.sublet = sublets.count()
+    sublet_duration = sum((s.move_out - s.move_in).days for s in sublets)
+    
+    # Update move_out and probation_end dates
+    main_tenant.move_out += timedelta(days=sublet_duration)
+    if main_tenant.probation_end > subtenant.move_in:
+        main_tenant.probation_end += timedelta(days=sublet_duration)
+    
+    main_tenant.save()
+    logger.info(f"Updated main tenant '{main_tenant.username}' sublet count to {main_tenant.sublet} and adjusted move_out to {main_tenant.move_out} due to subtenant change.")
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
