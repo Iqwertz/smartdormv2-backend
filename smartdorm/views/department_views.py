@@ -255,9 +255,10 @@ def create_new_tenant_view(request):
         
         probation_end_date = data['move_in'] + timedelta(days=app_config.PROBATION_PERIOD_DAYS)
         move_out_date = data['move_in'] + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
-        floor = data['current_room'][0] if data['current_room'] and data['current_room'][0].isdigit() else None
+        room = get_object_or_404(Room, name=data['current_room'])
+        floor = room.floor
         
-        Tenant.objects.create(
+        tenant = Tenant.objects.create(
             id=new_id,
             external_id=uuid.uuid4().hex,
             username=username,
@@ -281,8 +282,26 @@ def create_new_tenant_view(request):
             extension=0,
             sublet=0
         )
+
+        # Create the initial rental record
+        max_rental_id_result = Rental.objects.aggregate(max_id=Max('id'))
+        new_rental_id = (max_rental_id_result['max_id'] or 0) + 1
+        Rental.objects.create(
+            id=new_rental_id,
+            external_id=uuid.uuid4().hex,
+            tenant=tenant,
+            room=room,
+            move_in=data['move_in'],
+            moved_out=move_out_date
+        )
     except Exception as e:
-        logger.error(f"DB Error for new tenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True) #Maybe revert LDAP creation here? #todo
+        logger.error(f"DB Error for new tenant '{username}': {e}. Attempting to revert LDAP user creation.", exc_info=True)
+        try:
+            ldap_utils.delete_ldap_user(username)
+            logger.info(f"Successfully reverted LDAP creation for user '{username}'.")
+        except Exception as ldap_e:
+            logger.error(f"Failed to revert LDAP creation for user '{username}'. Manual cleanup required. Error: {ldap_e}", exc_info=True)
+        
         return Response({"error": "Authentication entry was created, but failed to save tenant to database. Please contact support."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # 4. Send notification email to the new tenant
