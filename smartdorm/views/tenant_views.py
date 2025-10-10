@@ -413,15 +413,12 @@ def list_engagement_applications_view(request):
     if not next_semester:
         return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # --- THE FIX: Use .values() for maximum performance ---
-    # We select only the data we need, directly into dictionaries.
-    # This avoids creating expensive model instances.
     applications_data = EngagementApplication.objects.filter(
         semester=next_semester
     ).order_by('department_id', 'tenant_id').values(
         'id',
         'motivation',
-        'image_name',  # Fetching the small image_name is fast
+        'image_name', 
         'tenant__name',
         'tenant__surname',
         'department__id',
