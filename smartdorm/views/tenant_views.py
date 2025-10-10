@@ -33,6 +33,7 @@ from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
 from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer, MyEngagementApplicationSerializer
 from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
+from .engagement_views import trigger_pdf_regeneration
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +397,8 @@ def create_engagement_application_view(request):
             image=image_file.read() if image_file else None,
             image_name=image_file.name if image_file else None,
         )
+        # Trigger PDF regeneration for the affected semester
+        trigger_pdf_regeneration(next_semester)
         return Response({"message": "Application submitted successfully."}, status=status.HTTP_201_CREATED)
     except Exception as e:
         logger.error(f"Error creating engagement application for {tenant.username}: {e}", exc_info=True)
@@ -520,7 +523,10 @@ def delete_engagement_application_view(request, app_id):
         if application.semester != next_semester:
             return Response({"error": "You can only delete applications for the upcoming semester."}, status=status.HTTP_403_FORBIDDEN)
 
+        application_semester = application.semester
         application.delete()
+        # Trigger PDF regeneration for the affected semester
+        trigger_pdf_regeneration(application_semester)
         return Response(status=status.HTTP_204_NO_CONTENT)
     except Tenant.DoesNotExist:
         return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)

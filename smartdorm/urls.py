@@ -38,13 +38,13 @@ tenant_urlpatterns = [
     path('engagement-application/<int:app_id>/delete/', tenant_views.delete_engagement_application_view, name='delete-engagement-application'),
     path('engagement-application/<int:app_id>/image/', tenant_views.get_application_image_view, name='get-application-image'),
     path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
+    path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
 ]
 
 # Engagement-related URLs
 engagement_urlpatterns = [
     # Application Management for Heimrat
-    path('heimrat/applications/', engagement_views.generate_applications_pdf, name='applications-pdf'),
     path('heimrat/applications/list/', engagement_views.heimrat_list_applications_view, name='heimrat-list-applications'),
     path('heimrat/applications/create/', engagement_views.heimrat_create_application_view, name='heimrat-create-application'),
     path('heimrat/applications/<int:app_id>/delete/', engagement_views.heimrat_delete_application_view, name='heimrat-delete-application'),

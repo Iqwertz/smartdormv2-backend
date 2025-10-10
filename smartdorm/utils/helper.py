@@ -50,6 +50,22 @@ def get_next_semester(current_semester: str) -> str:
     logger.warning(f"Could not determine next semester for unrecognized format: {current_semester}")
     return ""
 
+def get_previous_semester(current_semester: str) -> str:
+    """Calculates the previous academic semester."""
+    ss_match = re.match(r'^SS(\d{2})$', current_semester)
+    if ss_match:
+        year = int(ss_match.group(1))
+        prev_year_short = (year - 1 + 100) % 100 # Handles year 00 correctly
+        return f"WS{prev_year_short:02d}/{year:02d}"
+
+    ws_match = re.match(r'^WS(\d{2})/(\d{2})$', current_semester)
+    if ws_match:
+        start_year = int(ws_match.group(1))
+        return f"SS{start_year:02d}"
+
+    logger.warning(f"Could not determine previous semester for unrecognized format: {current_semester}")
+    return ""
+
 def generate_secure_password(length=12):
     """Generates a secure, random password."""
     alphabet = string.ascii_letters + string.digits + string.punctuation
