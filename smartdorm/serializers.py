@@ -289,5 +289,6 @@ class EngagementCreateByHeimratSerializer(serializers.Serializer):
             raise serializers.ValidationError("Department not found.")
         return value
 
-class EngagementPointUpdateSerializer(serializers.Serializer):
+class EngagementUpdateSerializer(serializers.Serializer):
     points = serializers.DecimalField(max_digits=19, decimal_places=2)
+    note = serializers.CharField(required=False, allow_blank=True)

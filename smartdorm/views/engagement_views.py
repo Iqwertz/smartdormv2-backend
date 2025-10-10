@@ -19,7 +19,7 @@ from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenan
 from ..serializers import (
     GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
     HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
-    EngagementCreateByHeimratSerializer, EngagementPointUpdateSerializer
+    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer
 )
 from ..utils import ldap_utils
 from rest_framework.response import Response
@@ -561,16 +561,17 @@ def create_engagement_admin_view(request):
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
-def update_engagement_points_view(request, engagement_id):
-    """ Updates the points for a specific engagement. """
-    update_engagement_points_view.required_groups = HEIMRAT_INFO_GROUPS
+def update_engagement_view(request, engagement_id):
+    """ Updates the entry for a specific engagement, points and note can be updated. """
+    update_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
-    serializer = EngagementPointUpdateSerializer(data=request.data)
+    serializer = EngagementUpdateSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     engagement.points = serializer.validated_data['points']
+    engagement.note = serializer.validated_data.get('note', engagement.note)
     engagement.save()
     
     response_serializer = AdminEngagementListSerializer(engagement)
