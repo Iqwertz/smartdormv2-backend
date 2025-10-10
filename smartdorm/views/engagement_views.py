@@ -800,3 +800,54 @@ def update_semester_and_ldap_view(request):
         "removed_from_groups_for_semester": old_semester,
         "added_to_groups_for_semester": new_semester
     })
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def export_tenants_csv(request):
+    """
+    API endpoint to export a CSV file of tenants.
+    Filter by floor using query parameter: ?floor=H1EG or ?floor=all
+    CSV format: "firstname","lastname","email","room_number"
+    """
+    export_tenants_csv.required_groups = ['Heimrat', 'ADMIN']
+    
+    floor = request.GET.get('floor', 'all')
+    
+    today = timezone.now().date()
+    
+    # Base queryset for current tenants
+    tenants = Tenant.objects.filter(
+        move_in__lte=today,
+        move_out__gte=today
+    )
+    
+    # Apply floor filter if not "all"
+    if floor != 'all':
+        tenants = tenants.filter(current_floor=floor)
+    
+    tenants = tenants.order_by('surname', 'name')
+    
+    if not tenants.exists():
+        return HttpResponse("No tenants found for the specified filter.", status=404)
+    
+    # Create CSV response
+    response = HttpResponse(
+        content_type='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="tenants_floor_{floor}.csv"'},
+    )
+    response.write(u'\ufeff'.encode('utf8'))  # BOM for Excel UTF-8 compatibility
+    
+    writer = csv.writer(response)
+    writer.writerow(['firstname', 'lastname', 'email', 'attribute_1'])
+    
+    for tenant in tenants:
+        writer.writerow([
+            tenant.name,
+            tenant.surname,
+            tenant.email,
+            tenant.current_room or 'N/A'
+        ])
+    
+    return response
