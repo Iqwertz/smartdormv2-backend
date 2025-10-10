@@ -34,21 +34,93 @@ def checkValidSemesterFormat(semester: str) -> bool:
             return True
     return False
 
-def get_next_semester(current_semester: str) -> str:
-    """Calculates the next academic semester."""
-    ss_match = re.match(r'^SS(\d{2})$', current_semester)
+def get_next_semester(current_semester: str, numbers: int = 1) -> str:
+    """Calculates the next academic semester(s).
+    
+    Args:
+        current_semester: The current semester string (e.g., 'SS23' or 'WS23/24')
+        numbers: How many semesters to advance (default: 1)
+    
+    Returns:
+        The semester string that is 'numbers' semesters after the current one.
+    """
+    if numbers < 1:
+        logger.warning(f"Invalid numbers parameter: {numbers}. Must be >= 1.")
+        return current_semester
+    
+    semester = current_semester
+    for _ in range(numbers):
+        ss_match = re.match(r'^SS(\d{2})$', semester)
+        if ss_match:
+            year = int(ss_match.group(1))
+            next_year_short = (year + 1) % 100  # Handles year 99 -> 00 correctly
+            semester = f"WS{year:02d}/{next_year_short:02d}"
+            continue
+
+        ws_match = re.match(r'^WS(\d{2})/(\d{2})$', semester)
+        if ws_match:
+            start_year = int(ws_match.group(1))
+            next_year_short = (start_year + 1) % 100
+            semester = f"SS{next_year_short:02d}"
+            continue
+
+        logger.warning(f"Could not determine next semester for unrecognized format: {semester}")
+        return ""
+    
+    return semester
+
+def get_previous_semester(current_semester: str, numbers: int = 1) -> str:
+    """Calculates the previous academic semester(s).
+    
+    Args:
+        current_semester: The current semester string (e.g., 'SS23' or 'WS23/24')
+        numbers: How many semesters to go back (default: 1)
+    
+    Returns:
+        The semester string that is 'numbers' semesters before the current one.
+    """
+    if numbers < 1:
+        logger.warning(f"Invalid numbers parameter: {numbers}. Must be >= 1.")
+        return current_semester
+    
+    semester = current_semester
+    for _ in range(numbers):
+        ss_match = re.match(r'^SS(\d{2})$', semester)
+        if ss_match:
+            year = int(ss_match.group(1))
+            prev_year_short = (year - 1 + 100) % 100  # Handles year 00 correctly
+            semester = f"WS{prev_year_short:02d}/{year:02d}"
+            continue
+
+        ws_match = re.match(r'^WS(\d{2})/(\d{2})$', semester)
+        if ws_match:
+            start_year = int(ws_match.group(1))
+            semester = f"SS{start_year:02d}"
+            continue
+
+        logger.warning(f"Could not determine previous semester for unrecognized format: {semester}")
+        return ""
+    
+    return semester
+
+def semester_to_number(semester: str) -> int:
+    """
+    Converts a semester string to a numeric representation for easy comparison.
+    'SSYY' -> YY * 2
+    'WSYY/ZZ' -> YY * 2 + 1
+    """
+    ss_match = re.match(r'^SS(\d{2})$', semester)
     if ss_match:
         year = int(ss_match.group(1))
-        next_year_short = (year + 1) % 100
-        return f"WS{year}/{next_year_short:02d}"
+        return year * 2
 
-    ws_match = re.match(r'^WS(\d{2})/(\d{2})$', current_semester)
+    ws_match = re.match(r'^WS(\d{2})/(\d{2})$', semester)
     if ws_match:
-        end_year = int(ws_match.group(2))
-        return f"SS{end_year:02d}"
+        year = int(ws_match.group(1))
+        return year * 2 + 1
 
-    logger.warning(f"Could not determine next semester for unrecognized format: {current_semester}")
-    return ""
+    logger.warning(f"Could not convert unrecognized semester format to number: {semester}")
+    return -1
 
 def generate_secure_password(length=12):
     """Generates a secure, random password."""

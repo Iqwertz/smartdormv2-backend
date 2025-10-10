@@ -6,11 +6,14 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Max, Sum
+from django.db.models import Max, Sum, Prefetch
 import uuid
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django.core.cache import cache
+import time
+import threading
 
 from ..utils.helper import checkValidSemesterFormat, get_next_semester
 from ..utils.email_utils import send_email_message
@@ -19,7 +22,7 @@ from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenan
 from ..serializers import (
     GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
     HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
-    EngagementCreateByHeimratSerializer, EngagementPointUpdateSerializer
+    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer, TenantOverviewSerializer
 )
 from ..utils import ldap_utils
 from rest_framework.response import Response
@@ -230,39 +233,98 @@ class PDFGenerator:
         buffer.close()
         return pdf
 
+def _get_or_generate_cached_pdf(semester):
+    """
+    Handles PDF generation with caching and locking to prevent race conditions.
+    Returns the PDF bytes, b'NOT_FOUND' if no applications, or None on timeout.
+    """
+    cache_key = f"applications_pdf_{semester}"
+    lock_key = f"lock_applications_pdf_{semester}"
+
+    pdf_data = cache.get(cache_key)
+    if pdf_data:
+        return pdf_data
+
+    if cache.add(lock_key, 'generating', timeout=120):  # Lock for 2 minutes
+        try:
+            logger.info(f"Cache miss for {cache_key}. Generating PDF.")
+            applications = EngagementApplication.objects.select_related(
+                'department', 'tenant'
+            ).filter(semester=semester).order_by('department__name', 'tenant__surname', 'tenant__name')
+
+            if not applications.exists():
+                cache.set(cache_key, b'NOT_FOUND', timeout=3600)
+                return b'NOT_FOUND'
+
+            pdf_generator = PDFGenerator()
+            pdf_title = f"Referatsbewerbungen - {semester}"
+            pdf_data = pdf_generator.generate_pdf(applications, title=pdf_title)
+            cache.set(cache_key, pdf_data, timeout=None)
+            logger.info(f"Successfully generated and cached PDF for {semester}.")
+            return pdf_data
+        finally:
+            cache.delete(lock_key)
+    else:
+        # Another process is generating, wait and retry
+        for _ in range(15):  # Wait up to 15 seconds
+            time.sleep(1)
+            pdf_data = cache.get(cache_key)
+            if pdf_data:
+                return pdf_data
+        logger.warning(f"Timeout waiting for PDF generation for semester {semester}.")
+        return None
+
+def trigger_pdf_regeneration(semester):
+    """
+    Invalidates the cache and triggers an asynchronous regeneration of the PDF.
+    """
+    cache_key = f"applications_pdf_{semester}"
+    logger.info(f"Invalidating cache and triggering async PDF regeneration for semester: {semester}")
+    cache.delete(cache_key)
+
+    # Run the PDF generation in a background thread
+    thread = threading.Thread(target=_get_or_generate_cached_pdf, args=(semester,))
+    thread.daemon = True  # Allows the main program to exit even if threads are running
+    thread.start()
+
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
-def generate_applications_pdf(request):
-    
-    generate_applications_pdf.required_groups = ['Netzwerkreferat', 'Heimrat', 'ADMIN']
-    generate_applications_pdf.required_employee_types = ['TENANT']
-    # Fetch applications, prefetch related tenant and department for efficiency
-    # Adjust the filter as needed (e.g., specific semester)
+@permission_classes([IsAuthenticated])
+def get_applications_pdf(request):
+    """
+    Serves a cached PDF of engagement applications for a given semester.
+    Accessible to all tenants, but respects the 'show_applications' global setting.
+    """
+    get_applications_pdf.required_employee_types = ['TENANT']
     settings = GlobalAppSettings.load()
-    semester_filter = request.GET.get('semester', get_next_semester(settings.current_semester)) # Example: get semester from query param or default
-    applications = EngagementApplication.objects.select_related(
-        'department', 'tenant'
-    ).filter(
-        semester=semester_filter
-    ).order_by( # Order ensures predictable grouping if needed later, but grouping handles it
-        'department__name', 'tenant__surname', 'tenant__name'
-    )
 
-    if not applications.exists():
-         return HttpResponse(f"Keine Bewerbungen für das Semester {semester_filter} gefunden.", status=404)
+    semester = request.GET.get('semester')
+    
+    if not settings.show_applications and semester == get_next_semester(settings.current_semester):
+        return Response({"error": "Applications are not currently visible to tenants."}, status=status.HTTP_403_FORBIDDEN)
+    
+    if not semester:
+        semester = get_next_semester(settings.current_semester)
+    
+    if not checkValidSemesterFormat(semester):
+        return Response({"error": "Invalid semester format. Use SSYY or WSYY/YY."}, status=status.HTTP_400_BAD_REQUEST)
 
-    pdf_generator = PDFGenerator()
-    pdf_title = f"Referatsbewerbungen - {semester_filter}"
-    pdf = pdf_generator.generate_pdf(applications, title=pdf_title)
+    pdf_data = _get_or_generate_cached_pdf(semester)
+
+    if pdf_data is None:
+        return Response(
+            {"error": "PDF is currently being generated. Please try again in a moment."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    
+    if pdf_data == b'NOT_FOUND':
+        return HttpResponse(f"Keine Bewerbungen für das Semester {semester} gefunden.", status=404)
 
     response = HttpResponse(content_type='application/pdf')
-    # Make filename dynamic based on semester
-    response['Content-Disposition'] = f'attachment; filename="referatsbewerbungen_{semester_filter.replace("/", "-")}.pdf"'
-    response.write(pdf)
+    response['Content-Disposition'] = f'attachment; filename="referatsbewerbungen_{semester.replace("/", "-")}.pdf"'
+    response.write(pdf_data)
 
     return response
-
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
@@ -436,7 +498,9 @@ def heimrat_delete_application_view(request, app_id):
 
     try:
         application = EngagementApplication.objects.get(id=app_id)
+        application_semester = application.semester
         application.delete()
+        trigger_pdf_regeneration(application_semester)
         return Response(status=status.HTTP_204_NO_CONTENT)
     except EngagementApplication.DoesNotExist:
         return Response({"error": "Application not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -486,6 +550,7 @@ def heimrat_create_application_view(request):
             image=image_file.read() if image_file else None,
             image_name=image_file.name if image_file else None,
         )
+        trigger_pdf_regeneration(next_semester)
         return Response({"message": "Application created successfully on behalf of the tenant."}, status=status.HTTP_201_CREATED)
     except Exception as e:
         logger.error(f"Heimrat error creating engagement application: {e}", exc_info=True)
@@ -561,16 +626,17 @@ def create_engagement_admin_view(request):
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
-def update_engagement_points_view(request, engagement_id):
-    """ Updates the points for a specific engagement. """
-    update_engagement_points_view.required_groups = HEIMRAT_INFO_GROUPS
+def update_engagement_view(request, engagement_id):
+    """ Updates the entry for a specific engagement, points and note can be updated. """
+    update_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
-    serializer = EngagementPointUpdateSerializer(data=request.data)
+    serializer = EngagementUpdateSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     engagement.points = serializer.validated_data['points']
+    engagement.note = serializer.validated_data.get('note', engagement.note)
     engagement.save()
     
     response_serializer = AdminEngagementListSerializer(engagement)
@@ -800,3 +866,124 @@ def update_semester_and_ldap_view(request):
         "removed_from_groups_for_semester": old_semester,
         "added_to_groups_for_semester": new_semester
     })
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def export_tenants_csv(request):
+    """
+    API endpoint to export a CSV file of tenants.
+    Filter by floor using query parameter: ?floor=H1EG or ?floor=all
+    CSV format: "firstname","lastname","email","room_number"
+    """
+    export_tenants_csv.required_groups = ['Heimrat', 'ADMIN']
+    
+    floor = request.GET.get('floor', 'all')
+    
+    today = timezone.now().date()
+    
+    # Base queryset for current tenants
+    tenants = Tenant.objects.filter(
+        move_in__lte=today,
+        move_out__gte=today
+    )
+    
+    # Apply floor filter if not "all"
+    if floor != 'all':
+        tenants = tenants.filter(current_floor=floor)
+    
+    tenants = tenants.order_by('surname', 'name')
+    
+    if not tenants.exists():
+        return HttpResponse("No tenants found for the specified filter.", status=404)
+    
+    # Create CSV response
+    response = HttpResponse(
+        content_type='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="tenants_floor_{floor}.csv"'},
+    )
+    response.write(u'\ufeff'.encode('utf8'))  # BOM for Excel UTF-8 compatibility
+    
+    writer = csv.writer(response)
+    writer.writerow(['firstname', 'lastname', 'email', 'attribute_1'])
+    
+    for tenant in tenants:
+        writer.writerow([
+            tenant.name,
+            tenant.surname,
+            tenant.email,
+            tenant.current_room or 'N/A'
+        ])
+    
+    return response
+
+
+# --- Misc Overview Endpoints ---
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def tenant_overview_data_view(request):
+    """
+    Retrieves a list of all current tenants, including their full details and all associated engagements.
+    """
+    tenant_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    today = timezone.now().date()
+    
+    # Prefetch engagements and their related departments to avoid N+1 queries
+    tenants = Tenant.objects.filter(
+        move_in__lte=today,
+        move_out__gte=today
+    ).prefetch_related(
+        Prefetch(
+            'engagement_set',
+            queryset=Engagement.objects.select_related('department').order_by('-semester')
+        )
+    ).order_by('surname', 'name')
+
+    serializer = TenantOverviewSerializer(tenants, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def engagement_overview_data_view(request):
+    """
+    Retrieves all engagement entries, grouped by department.
+    Each engagement includes minimal tenant info.
+    """
+    engagement_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    # Query all engagements with related data
+    engagements_query = Engagement.objects.select_related(
+        'tenant', 'department'
+    ).order_by('department__name', '-semester', 'tenant__surname')
+    
+    # Group engagements by department
+    grouped_engagements = defaultdict(lambda: {
+        "department_id": None,
+        "department_name": None,
+        "department_full_name": None,
+        "engagements": []
+    })
+    
+    for engagement in engagements_query:
+        dept_id = engagement.department.id
+        group = grouped_engagements[dept_id]
+        
+        if group["department_id"] is None:
+            group["department_id"] = dept_id
+            group["department_name"] = engagement.department.name
+            group["department_full_name"] = engagement.department.full_name
+            
+        # Serialize individual engagement
+        engagement_serializer = AdminEngagementListSerializer(engagement)
+        group["engagements"].append(engagement_serializer.data)
+        
+    # Convert the defaultdict to a simple list for the final response
+    response_data = list(grouped_engagements.values())
+    
+    return Response(response_data, status=status.HTTP_200_OK)
