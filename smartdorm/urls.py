@@ -67,6 +67,8 @@ engagement_urlpatterns = [
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
     path('heimrat/set-show-applications/', engagement_views.set_show_applications_view, name='set-show-applications'),
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
+    path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
+    path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),
 ]
 
 

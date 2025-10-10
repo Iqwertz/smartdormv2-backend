@@ -6,7 +6,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Max, Sum
+from django.db.models import Max, Sum, Prefetch
 import uuid
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
@@ -22,7 +22,7 @@ from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenan
 from ..serializers import (
     GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
     HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
-    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer
+    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer, TenantOverviewSerializer
 )
 from ..utils import ldap_utils
 from rest_framework.response import Response
@@ -917,3 +917,73 @@ def export_tenants_csv(request):
         ])
     
     return response
+
+
+# --- Misc Overview Endpoints ---
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def tenant_overview_data_view(request):
+    """
+    Retrieves a list of all current tenants, including their full details and all associated engagements.
+    """
+    tenant_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    today = timezone.now().date()
+    
+    # Prefetch engagements and their related departments to avoid N+1 queries
+    tenants = Tenant.objects.filter(
+        move_in__lte=today,
+        move_out__gte=today
+    ).prefetch_related(
+        Prefetch(
+            'engagement_set',
+            queryset=Engagement.objects.select_related('department').order_by('-semester')
+        )
+    ).order_by('surname', 'name')
+
+    serializer = TenantOverviewSerializer(tenants, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def engagement_overview_data_view(request):
+    """
+    Retrieves all engagement entries, grouped by department.
+    Each engagement includes minimal tenant info.
+    """
+    engagement_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    # Query all engagements with related data
+    engagements_query = Engagement.objects.select_related(
+        'tenant', 'department'
+    ).order_by('department__name', '-semester', 'tenant__surname')
+    
+    # Group engagements by department
+    grouped_engagements = defaultdict(lambda: {
+        "department_id": None,
+        "department_name": None,
+        "department_full_name": None,
+        "engagements": []
+    })
+    
+    for engagement in engagements_query:
+        dept_id = engagement.department.id
+        group = grouped_engagements[dept_id]
+        
+        if group["department_id"] is None:
+            group["department_id"] = dept_id
+            group["department_name"] = engagement.department.name
+            group["department_full_name"] = engagement.department.full_name
+            
+        # Serialize individual engagement
+        engagement_serializer = AdminEngagementListSerializer(engagement)
+        group["engagements"].append(engagement_serializer.data)
+        
+    # Convert the defaultdict to a simple list for the final response
+    response_data = list(grouped_engagements.values())
+    
+    return Response(response_data, status=status.HTTP_200_OK)

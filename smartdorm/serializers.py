@@ -292,3 +292,10 @@ class EngagementCreateByHeimratSerializer(serializers.Serializer):
 class EngagementUpdateSerializer(serializers.Serializer):
     points = serializers.DecimalField(max_digits=19, decimal_places=2)
     note = serializers.CharField(required=False, allow_blank=True)
+
+class TenantOverviewSerializer(TenantSerializer):
+    """Serializer for the tenant overview, includes all tenant data plus their engagements."""
+    engagements = EngagementSerializer(many=True, read_only=True, source='engagement_set')
+
+    class Meta(TenantSerializer.Meta):
+        fields = TenantSerializer.Meta.fields + ['engagements']
