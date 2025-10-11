@@ -28,6 +28,7 @@ mkdir -p logs
 # Install/update dependencies
 echo "Installing dependencies..."
 pip install -r requirements.txt
+pip install gunicorn
 
 # Run database migrations
 echo "Running database migrations..."
