@@ -16,7 +16,7 @@ stages:
     # Copy the correct .env file to the server
     - ssh ${SERVER_USER}@${SERVER_IP} "echo '${ENV_FILE_CONTENT}' > /var/www/smartdorm/smartdormv2-backend/.env"
     # Execute the deployment script, passing the branch name as an argument
-    - ssh ${SERVER_USER}@${SERVER_IP} "bash /var/www/smartdorm/deploy.sh ${CI_COMMIT_REF_NAME}"
+    - ssh ${SERVER_USER}@${SERVER_IP} "bash /var/www/smartdorm/smartdormv2-backend/deploy.sh ${CI_COMMIT_REF_NAME}"
 
 deploy_to_development:
   stage: deploy
