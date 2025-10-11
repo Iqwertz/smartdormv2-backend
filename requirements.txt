@@ -16,3 +16,6 @@ django-redis>=5.0.0
 django-cors-headers>=3.0.0
 Pillow
 reportlab
+python-dateutil
+pypdf
+requests

@@ -32,6 +32,10 @@ class Tenant(models.Model):
     class Meta:
         db_table = 't_tenant'
         managed = False
+        
+    def get_full_name(self):
+        """Returns the person's full name."""
+        return f"{self.name} {self.surname}"
 
 # Example queries using tenants model
 def get_active_tenants():
@@ -112,7 +116,7 @@ class Engagement(models.Model):
 
 class EngagementApplication(models.Model):
     id = models.IntegerField(primary_key=True)
-    semester = models.CharField(max_length=255)
+    semester = models.CharField(max_length=255) 
     motivation = models.TextField()
     external_id = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.DO_NOTHING, db_column='department_id')
@@ -125,10 +129,15 @@ class EngagementApplication(models.Model):
         managed = False
 
 class Departure(models.Model):
+    class Status(models.TextChoices):
+        CREATED = 'CREATED', 'Erstellt'
+        POSTPONED = 'POSTPONED', 'Verlängert'
+        CONFIRMED = 'CONFIRMED', 'Bestätigt'
+        CLOSED = 'CLOSED', 'Abgeschlossen'
     tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    status = models.CharField(max_length=255)
+    status = models.CharField(max_length=255, choices=Status.choices, default=Status.CREATED) # 'POSTPONED', 'CREATED', 'CLOSED', 'CONFIRMED'
 
     class Meta:
         db_table = 't_departure'
@@ -164,7 +173,7 @@ class Subtenant(models.Model):
     id = models.IntegerField(primary_key=True)
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    move_id = models.DateField()
+    move_in = models.DateField(db_column='move_id') # Note: 'move_id' is a typo in the original db, should have been 'move_in' but is kept for compatibility
     move_out = models.DateField()
     university_confirmation = models.BooleanField()
     room = models.ForeignKey(Room, on_delete=models.DO_NOTHING, db_column='room_id')
@@ -197,11 +206,20 @@ class DepositBank(models.Model):
         managed = False
 
 class Claim(models.Model):
+    class Status(models.TextChoices):
+        CREATED = 'CREATED', 'Erstellt'
+        PROCESSING = 'PROCESSING', 'In Bearbeitung'
+        APPROVED = 'APPROVED', 'Genehmigt'
+        REJECTED = 'REJECTED', 'Abgelehnt'
+
+    class Type(models.TextChoices):
+        EXTENSION = 'EXTENSION', 'Verlängerung'
+
     id = models.IntegerField(primary_key=True)
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
-    status = models.CharField(max_length=20)
-    type = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.CREATED)
+    type = models.CharField(max_length=20, choices=Type.choices)
     tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
 
     class Meta:
@@ -238,6 +256,10 @@ class GlobalAppSettings(models.Model):
     applications_open = models.BooleanField(
         default=False,
         help_text="Are new applications currently being accepted?"
+    )
+    show_applications = models.BooleanField(
+        default=False,
+        help_text="Are engagement applications visible to tenants?"
     )
     # Example of another setting:
     # site_maintenance_mode = models.BooleanField(default=False, help_text="Is the site in maintenance mode?")

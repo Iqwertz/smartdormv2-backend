@@ -4,7 +4,10 @@ from django.contrib.auth import authenticate, login as auth_login, logout as aut
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.middleware.csrf import get_token
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from django.http import HttpResponse, Http404
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
+from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
@@ -12,16 +15,25 @@ from rest_framework import status
 from django.conf import settings
 from django.http import HttpResponseServerError, HttpResponse
 import logging
+import uuid
 from smartdorm.serializers import TenantSerializer, EngagementSerializer, HsvTenantSerializer
 from ..models import Engagement
-from django.db.models import Prefetch
+from ..utils import email_utils, pdf_utils
+from .. import config as app_config
+from django.db.models import Prefetch, Max
 from django.utils import timezone  
 from collections import defaultdict
 from django.db.models import F
+from django.db import transaction
+from django.core.cache import cache
+from rest_framework.parsers import MultiPartParser, FormParser
+
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Engagement, GlobalAppSettings
-from ..serializers import TenantSerializer, GlobalAppSettingsSerializer
+from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
+from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer, MyEngagementApplicationSerializer
+from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
+from .engagement_views import trigger_pdf_regeneration
 
 logger = logging.getLogger(__name__)
 
@@ -214,3 +226,309 @@ def get_global_settings_view(request):
             {"error": "An error occurred while retrieving global settings."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+        
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def my_departure_view(request):
+    my_departure_view.required_employee_types = ['TENANT']
+    
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
+        serializer = DepartureSerializer(departure)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except (Tenant.DoesNotExist, Departure.DoesNotExist):
+        return Response({"detail": "No open departure request found."}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error fetching departure for user {request.user.username}: {e}", exc_info=True)
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+@transaction.atomic
+def decide_departure_view(request):
+    decide_departure_view.required_employee_types = ['TENANT']
+
+    decision = request.data.get('decision', '').upper()
+    if decision not in ['CONFIRM', 'POSTPONE']:
+        return Response({"error": "Invalid decision. Must be 'CONFIRM' or 'POSTPONE'."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
+    except (Tenant.DoesNotExist, Departure.DoesNotExist):
+        return Response({"error": "No open departure request found to decide on."}, status=status.HTTP_404_NOT_FOUND)
+
+    if decision == 'POSTPONE':
+        departure.status = Departure.Status.POSTPONED
+        departure.save()
+        # Create a new claim for extension
+        max_id_result = Claim.objects.aggregate(max_id=Max('id'))
+        new_id = (max_id_result['max_id'] or 0) + 1
+        Claim.objects.create(
+            id=new_id, external_id=uuid.uuid4().hex, tenant=tenant,
+            status=Claim.Status.CREATED, type=Claim.Type.EXTENSION,
+            created_on=timezone.now().date()
+        )
+        
+        pdf_data = pdf_utils.prepare_extension_application_pdf_data(tenant)
+        
+        # Send email notification to the department
+        email_utils.send_email_message(
+            recipient_list=[app_config.DEPARTMENT_EMAIL],
+            subject=f"{tenant.name} {tenant.surname} möchte verlängern",
+            html_template_name='email/management-departure-postponement.html',
+            context={
+                'name': f"{tenant.name} {tenant.surname}",
+                'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+            }
+        )
+        
+        #Send email to tenant
+        email_utils.send_email_message(
+            recipient_list=[tenant.email],
+            subject=f"Wohnzeitverlängerungsbewerbung",
+            html_template_name='email/tenant-departure-postponement.html',
+            context={
+                'name': f"{tenant.name} {tenant.surname}",
+                'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+            },
+            dynamic_pdf_template_path='pdf/Wohnzeitverlaengerung-Bewerbungsformular.pdf',
+            dynamic_pdf_data=pdf_data,
+            dynamic_pdf_filename=f"Antrag_Wohnzeitverlaengerung_{tenant.surname}.pdf"
+        )
+
+        return Response({"message": "Departure successfully postponed."}, status=status.HTTP_200_OK)
+
+    elif decision == 'CONFIRM':
+        iban = request.data.get('iban')
+        name = request.data.get('name')
+        if not iban or not name:
+            return Response({"error": "IBAN and account holder name are required to confirm departure."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create or update bank details
+        DepositBank.objects.update_or_create(
+            tenant=tenant,
+            defaults={'name': name, 'iban': iban}
+        )
+
+        departure.status = Departure.Status.CONFIRMED
+        departure.save()
+
+        # Create open signatures and notify departments
+        create_and_notify_departure_signatures(departure)
+
+        # Send email notification to the department
+        email_utils.send_email_message(
+            recipient_list=[app_config.DEPARTMENT_EMAIL],
+            subject=f"{tenant.name} {tenant.surname} möchte ausziehen",
+            html_template_name='email/management-departure-confirmation.html',
+            context={
+                'name': f"{tenant.name} {tenant.surname}",
+                'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+                'departureDate': tenant.move_out,
+            }
+        )
+        
+        #Send email to tenant
+        email_utils.send_email_message(
+            recipient_list=[tenant.email],
+            subject="Dein Auszug aus dem Schollheim",
+            html_template_name='email/tenant-departure-confirmation.html',
+            context={
+                'greeting': {tenant.name},
+                'departureDate': tenant.move_out,
+            }
+        )
+
+        return Response({"message": "Departure successfully confirmed."}, status=status.HTTP_200_OK)
+
+    return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+@parser_classes([MultiPartParser, FormParser])
+def create_engagement_application_view(request):
+    create_engagement_application_view.required_employee_types = ['TENANT']
+
+    settings = GlobalAppSettings.load()
+    if not settings.applications_open:
+        return Response({"error": "Applications are currently closed."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    next_semester = get_next_semester(settings.current_semester)
+    if not next_semester:
+        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Check for existing application for the same department in the same semester
+    department_id = request.data.get('department')
+    if EngagementApplication.objects.filter(tenant=tenant, semester=next_semester, department_id=department_id).exists():
+        return Response({"error": f"You have already applied for this department for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
+    
+    data = request.data.copy()
+    serializer = EngagementApplicationCreateSerializer(data=data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    validated_data = serializer.validated_data
+
+    max_id_result = EngagementApplication.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+
+    image_file = request.FILES.get('image')
+
+    try:
+        EngagementApplication.objects.create(
+            id=new_id,
+            external_id=uuid.uuid4().hex,
+            tenant=tenant,
+            semester=next_semester,
+            department=validated_data['department'],
+            motivation=validated_data['motivation'],
+            image=image_file.read() if image_file else None,
+            image_name=image_file.name if image_file else None,
+        )
+        # Trigger PDF regeneration for the affected semester
+        trigger_pdf_regeneration(next_semester)
+        return Response({"message": "Application submitted successfully."}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.error(f"Error creating engagement application for {tenant.username}: {e}", exc_info=True)
+        return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def list_engagement_applications_view(request):
+    settings = GlobalAppSettings.load()
+    if not settings.show_applications:
+        return Response([], status=status.HTTP_200_OK)
+
+    next_semester = get_next_semester(settings.current_semester)
+    if not next_semester:
+        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    applications_data = EngagementApplication.objects.filter(
+        semester=next_semester
+    ).order_by('department_id', 'tenant_id').values(
+        'id',
+        'motivation',
+        'image_name', 
+        'tenant__name',
+        'tenant__surname',
+        'department__id',
+        'department__full_name'
+    )
+
+    # Manually construct the final JSON structure, which is very fast.
+    results = []
+    for app in applications_data:
+        image_url = None
+        # If there's an image_name, an image exists.
+        if app['image_name']:
+            image_url = request.build_absolute_uri(
+                reverse('tenants:get-application-image', kwargs={'app_id': app['id']})
+            )
+
+        results.append({
+            'id': app['id'],
+            'motivation': app['motivation'],
+            'tenant': {
+                'name': app['tenant__name'],
+                'surname': app['tenant__surname']
+            },
+            'department': {
+                'id': app['department__id'],
+                'full_name': app['department__full_name']
+                # The frontend doesn't need department 'name', only 'full_name'
+            },
+            'image_url': image_url
+        })
+
+    return Response(results)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def get_application_image_view(request, app_id):
+    """
+    Serves the image for a specific engagement application.
+    Permissions are checked based on the main list view's logic.
+    """
+    settings = GlobalAppSettings.load()
+    if not settings.show_applications:
+        # If applications aren't visible, tenants shouldn't access images either
+        raise Http404
+
+    cache_key = f"appimg:{app_id}"
+    cached_bytes = cache.get(cache_key)
+    if cached_bytes:
+        resp = HttpResponse(cached_bytes, content_type='image/jpeg')
+        resp['Cache-Control'] = 'public, max-age=5184000, immutable'
+        return resp
+
+    application = get_object_or_404(EngagementApplication, id=app_id)
+    if not application.image:
+        raise Http404
+
+    img_bytes = application.image.tobytes() if hasattr(application.image, 'tobytes') else bytes(application.image)
+    try:
+        cache.set(cache_key, img_bytes, timeout=5184000)
+    except Exception:
+        pass
+    resp = HttpResponse(img_bytes, content_type='image/jpeg')
+    resp['Cache-Control'] = 'public, max-age=5184000, immutable'
+    return resp
+    
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def my_engagement_applications_view(request):
+    my_engagement_applications_view.required_employee_types = ['TENANT']
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        applications = EngagementApplication.objects.filter(tenant=tenant).order_by('-semester', 'department__name')
+        serializer = MyEngagementApplicationSerializer(applications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def delete_engagement_application_view(request, app_id):
+    delete_engagement_application_view.required_employee_types = ['TENANT']
+
+    settings = GlobalAppSettings.load()
+    if not settings.applications_open:
+        return Response({"error": "Applications are closed and cannot be modified."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        application = EngagementApplication.objects.get(id=app_id, tenant=tenant)
+        
+        # To prevent deleting old applications, only allow deletion for the upcoming semester.
+        next_semester = get_next_semester(settings.current_semester)
+        if application.semester != next_semester:
+            return Response({"error": "You can only delete applications for the upcoming semester."}, status=status.HTTP_403_FORBIDDEN)
+
+        application_semester = application.semester
+        application.delete()
+        # Trigger PDF regeneration for the affected semester
+        trigger_pdf_regeneration(application_semester)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+    except EngagementApplication.DoesNotExist:
+        return Response({"error": "Application not found or you do not have permission to delete it."}, status=status.HTTP_404_NOT_FOUND)
