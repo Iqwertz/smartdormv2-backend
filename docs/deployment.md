@@ -61,7 +61,7 @@ This is a **one-time setup** required for the backend VM (both dev and prod).
 ### Step 1: Install System Dependencies
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server
+sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server git
 ```
 
 ### Step 2: Create Application User and Directory
@@ -150,7 +150,15 @@ sudo ufw allow 'Nginx Full'
 sudo ufw enable
 ```
 
+### Step 6: Clone the Repository and Set Up the Virtual Environment
+```bash
+su - smartdorm
+git clone ssh://git@gitlab.schollheim.net:smartdormv2/smartdormv2-backend.git /var/www/smartdorm/smartdormv2-backend
+cd /var/www/smartdorm/smartdormv2-backend
+python3 -m venv venv
+source venv/bin/activate
 ---
+```
 
 ## 4. Part B: Frontend Deployment Setup
 
@@ -159,7 +167,7 @@ This is a **one-time setup** required on each frontend VM.
 ### Step 1: Install Nginx
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y nginx
+sudo apt install -y nginx rsync
 ```
 
 ### Step 2: Create Application User and Directory
@@ -167,6 +175,9 @@ The application will run under its own user for security. The password for this 
 ```bash
 sudo adduser smartdorm
 sudo mkdir -p /var/www/smartdorm-frontend/html
+sudo usermod -aG smartdorm www-data
+sudo chmod -R 750 /var/www/smartdorm-frontend
+sudo chmod -R g+rx /var/www/smartdorm-frontend
 sudo chown -R smartdorm:smartdorm /var/www/smartdorm-frontend
 ```
 
