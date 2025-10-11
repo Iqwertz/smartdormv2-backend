@@ -1,10 +1,30 @@
 stages:
+  - package
   - deploy
+
+# New stage to package the application code as an artifact
+package_backend:
+  stage: package
+  image: alpine:latest
+  script:
+    - echo "Packaging application files..."
+  artifacts:
+    paths:
+      - .
+    exclude:
+      - .git/
+      - .git*
+      - "*.pyc"
+      - "__pycache__/"
+      - docs/
+    expire_in: 1 hour
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main"'
 
 .deploy_template: &deploy_definition
   image: alpine:latest
   before_script:
-    - "command -v ssh-agent >/dev/null || ( apk add --update openssh-client )"
+    - "command -v ssh-agent >/dev/null || ( apk add --no-cache openssh-client rsync )"
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
     - mkdir -p ~/.ssh
@@ -13,16 +33,21 @@ stages:
     - chmod 644 ~/.ssh/known_hosts
   script:
     - echo "Deploying to ${CI_ENVIRONMENT_NAME} server..."
-    # Copy the correct .env file to the server
+
+    - rsync -avz --delete --exclude='.env' . ${SERVER_USER}@${SERVER_IP}:/var/www/smartdorm/smartdormv2-backend/
+
+    # Create the .env file on the server
     - ssh ${SERVER_USER}@${SERVER_IP} "echo '${ENV_FILE_CONTENT}' > /var/www/smartdorm/smartdormv2-backend/.env"
-    # Execute the deployment script, passing the branch name as an argument
-    - ssh ${SERVER_USER}@${SERVER_IP} "bash /var/www/smartdorm/smartdormv2-backend/deploy.sh ${CI_COMMIT_REF_NAME}"
+
+    # Execute the deployment script.
+    - ssh ${SERVER_USER}@${SERVER_IP} "bash /var/www/smartdorm/smartdormv2-backend/deploy.sh"
 
 deploy_to_development:
   stage: deploy
   environment:
     name: development
   <<: *deploy_definition
+  needs: [package_backend] # This job depends on the package job
   rules:
     - if: '$CI_COMMIT_BRANCH == "development"'
 
@@ -31,6 +56,7 @@ deploy_to_production:
   environment:
     name: production
   <<: *deploy_definition
-  when: manual # Prevents accidental deployments to production.
+  needs: [package_backend] # This job depends on the package job
+  when: manual
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'

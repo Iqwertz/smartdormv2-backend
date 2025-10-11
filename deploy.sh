@@ -1,25 +1,12 @@
 #!/bin/bash
-#Deploy script for CI/CD pipeline on the vms. Dont execute this script locally
+# Deploy script for CI/CD pipeline on the vms.
+# This script is executed after rsync has copied the new code.
 set -e # Exit immediately if a command exits with a non-zero status.
 
-BRANCH_NAME=${1} # Accept the branch name as the first argument
-
-if [ -z "$BRANCH_NAME" ]; then
-    echo "Error: Branch name not provided."
-    exit 1
-fi
-
-echo "Starting deployment for branch: ${BRANCH_NAME}..."
+echo "Starting post-sync deployment tasks..."
 
 # Navigate to the project directory
 cd /var/www/smartdorm/smartdormv2-backend
-
-# Fetch all remote changes and switch to the correct branch
-git fetch origin
-git checkout ${BRANCH_NAME}
-
-# Pull the latest changes for that specific branch
-git pull origin ${BRANCH_NAME}
 
 # Load environment variables from .env file
 if [ -f .env ]; then
@@ -32,6 +19,7 @@ else
 fi
 
 # Activate the virtual environment
+python3 -m venv venv
 source venv/bin/activate
 
 echo "Ensuring logs directory exists..."
@@ -52,9 +40,12 @@ python manage.py collectstatic --noinput
 # Deactivate the virtual environment
 deactivate
 
+# echo "Setting file permissions..."
+# sudo chown -R www-data:www-data /var/www/smartdorm/smartdormv2-backend
+
 echo "Deployment finished. Restarting Gunicorn service..."
 
 # Restart the Gunicorn service
 sudo systemctl restart gunicorn
 
-echo "Gunicorn restarted. Deployment for ${BRANCH_NAME} complete."
+echo "Gunicorn restarted. Deployment complete."
