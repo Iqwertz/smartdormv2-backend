@@ -61,7 +61,7 @@ This is a **one-time setup** required for the backend VM (both dev and prod).
 ### Step 1: Install System Dependencies
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server git
+sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server rsync libsasl2-dev python-dev-is-python3 libldap2-dev libssl-dev
 ```
 
 ### Step 2: Create Application User and Directory
@@ -70,6 +70,9 @@ The password for this user is the same on all VMS and saved in the vault under "
 ```bash
 sudo adduser smartdorm
 sudo mkdir -p /var/www/smartdorm/smartdormv2-backend
+sudo usermod -aG smartdorm www-data
+sudo chmod -R 750 /var/www/smartdorm/smartdormv2-backend/
+sudo chmod -R g+rx /var/www/smartdorm/smartdormv2-backend/
 sudo chown -R smartdorm:smartdorm /var/www/smartdorm
 ```
 
@@ -150,16 +153,6 @@ sudo ufw allow 'Nginx Full'
 sudo ufw enable
 ```
 
-### Step 6: Clone the Repository and Set Up the Virtual Environment
-```bash
-su - smartdorm
-git clone ssh://git@gitlab.schollheim.net:smartdormv2/smartdormv2-backend.git /var/www/smartdorm/smartdormv2-backend
-cd /var/www/smartdorm/smartdormv2-backend
-python3 -m venv venv
-source venv/bin/activate
----
-```
-
 ## 4. Part B: Frontend Deployment Setup
 
 This is a **one-time setup** required on each frontend VM.
@@ -179,6 +172,15 @@ sudo usermod -aG smartdorm www-data
 sudo chmod -R 750 /var/www/smartdorm-frontend
 sudo chmod -R g+rx /var/www/smartdorm-frontend
 sudo chown -R smartdorm:smartdorm /var/www/smartdorm-frontend
+```
+
+To allow the GitLab CI/CD pipeline to restart the gunicorn service without a password prompt, you need to edit the sudoers file.
+```bash
+sudo visudo
+```
+Here add the following line to the end of the file to allow the `smartdorm` user to restart the gunicorn service without a password. This is needed for the deployment script to work.
+```plaintext
+smartdorm ALL=(ALL) NOPASSWD: /bin/systemctl restart gunicorn 
 ```
 
 ### Step 3: Configure Nginx to Serve the React App
@@ -222,19 +224,6 @@ sudo ufw enable
 ## 5. Part C: GitLab CI/CD Configuration
 
 Automation is handled by GitLab. This setup uses environment-scoped variables and deploy keys for security.
-
-### Step 1: GitLab Deploy Keys
-To allow GitLab's runner to pull code onto the server, a **Deploy Key** is used. This is needed only for the backend VMs.
-
-1.  **On the backend VM**, log in as the `smartdorm` user and generate an SSH key:
-    ```bash
-    su - smartdorm
-    ssh-keygen -t ed25519 -C "Backend Deploy Key"
-    cat ~/.ssh/id_ed25519.pub
-    ```
-2.  Copy the public key.
-3.  In the **smartdormV2-backend** GitLab project, go to **Settings > Repository > Deploy Keys**.
-4.  Add the key, giving it a descriptive title. **Do not grant write access.**
 
 ### Step 2: GitLab CI/CD Variables
 In each GitLab project (**frontend and backend**), go to **Settings > CI/CD > Variables**. Add the following variables, making sure to set the correct **Environment scope** (`development` or `production`) for each one.
@@ -304,7 +293,7 @@ The CI configuration is defined in the `.gitlab-ci.yml` file in the root of each
 With the setup complete, the deployment process is simple and automated:
 
 1.  **Develop:** A developer creates a feature branch and pushes their changes.
-2.  **Merge Request:** A Merge Request (MR) is created to target either the `development` or `main` branch.
+2.  **Merge Request:** A Merge Request (MR) is created to the development branch.
 3.  **Review & Merge:** The MR is reviewed and approved.
 4.  **Automatic Deployment (Development):**
     -   When an MR is merged into `development`, the pipeline automatically triggers and deploys the latest version to the development/test server.
