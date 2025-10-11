@@ -33,4 +33,4 @@ deploy_to_production:
   <<: *deploy_definition
   when: manual # Prevents accidental deployments to production.
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" && $CI_MERGE_REQUEST_STATE == "merged"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
