@@ -19,6 +19,7 @@ else
 fi
 
 # Activate the virtual environment
+python3 -m venv venv
 source venv/bin/activate
 
 echo "Ensuring logs directory exists..."
