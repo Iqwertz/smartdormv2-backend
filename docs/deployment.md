@@ -77,6 +77,21 @@ sudo chown -R smartdorm:smartdorm /var/www/smartdorm
 ```
 
 ### Step 3: Configure Gunicorn `systemd` Service
+Create a service file that will create the gunicorn socket directory.
+
+```bash
+sudo nano /etc/tmpfiles.d/gunicorn.conf
+```
+Paste the following:
+```plaintext
+d /run/gunicorn 0770 smartdorm www-data -
+```
+Reload the `systemd` daemon to recognize the new tmpfiles configuration and create the directory:
+```bash
+sudo systemd-tmpfiles --create
+sudo systemctl daemon-reload
+```
+
 Create a service file to manage the Gunicorn process.
 
 `sudo nano /etc/systemd/system/gunicorn.service`
@@ -100,7 +115,7 @@ EnvironmentFile=/var/www/smartdorm/smartdormv2-backend/.env
 ExecStart=/var/www/smartdorm/smartdormv2-backend/venv/bin/gunicorn \
           --access-logfile - \
           --workers 3 \
-          --bind unix:/run/gunicorn.sock \
+          --bind unix:/run/gunicorn/gunicorn.sock \
           smartdorm.wsgi:application
 
 [Install]
@@ -128,7 +143,7 @@ server {
     # Forward all application requests to the Gunicorn socket
     location / {
         include proxy_params;
-        proxy_pass http://unix:/run/gunicorn.sock;
+        proxy_pass http://unix:/run/gunicorn/gunicorn.sock;
     }
 
     # Serve static files directly for performance

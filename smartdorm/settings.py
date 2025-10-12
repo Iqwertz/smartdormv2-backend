@@ -9,7 +9,7 @@ LOCAL_ENV = os.environ.get("LOCAL_ENV", "false").lower() in ("true", "1", "yes")
 PRODUCTION_MODE = os.environ.get("PRODUCTION", "false").lower() in ("true", "1", "yes")
 DEBUG = not PRODUCTION_MODE
 
-ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', 'smartdormv2-api-dev.schollheim.net']
+ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -178,6 +178,11 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://smartdormv2-dev.schollheim.net",
     "https://smartdormv2-dev.schollheim.net",
+    "http://smartdormv2.schollheim.net",
+    "https://smartdormv2.schollheim.net",
+    "http://smartdorm.schollheim.net",
+    "https://smartdorm.schollheim.net",
+    
 ]
 
 if not LOCAL_ENV:
