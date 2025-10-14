@@ -17,7 +17,7 @@ import re
 
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank
-from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
+from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
 from .. import config as app_config
@@ -209,6 +209,69 @@ def move_tenant_view(request, tenant_id):
     logger.info(f"Tenant {tenant.username} moved from room {current_rental.room.name} to {new_room.name} on {move_date}.")
 
     return Response(TenantSerializer(tenant).data, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def terminate_tenant_view(request, tenant_id):
+    """
+    Terminates a tenant's contract effective from a specified move_out_date.
+    This updates the tenant's move_out date and initiates the departure process
+    by creating a 'CONFIRMED' departure and triggering signature creation.
+    """
+    terminate_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    terminate_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    serializer = TenantTerminationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    data = serializer.validated_data
+    move_out_date = data['move_out_date']
+    
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # Check if a departure process is already active
+    if Departure.objects.filter(tenant=tenant).exists():
+        return Response(
+            {"error": "A departure process for this tenant already exists. Please manage the existing departure instead."},
+            status=status.HTTP_409_CONFLICT
+        )
+        
+    # 1. Update tenant's move_out date
+    tenant.move_out = move_out_date
+    tenant.save()
+    logger.info(f"Tenant {tenant.username}'s move_out date updated to {move_out_date} for termination.")
+
+    # 2. Create a confirmed departure record
+    departure = Departure.objects.create(
+        tenant=tenant,
+        external_id=uuid.uuid4().hex,
+        created_on=timezone.now().date(),
+        status=Departure.Status.CONFIRMED
+    )
+    logger.info(f"Created CONFIRMED departure for tenant {tenant.username}.")
+    
+    # 3. Initiate the signature process
+    create_and_notify_departure_signatures(departure)
+    
+    # 4. Notify the tenant
+    email_utils.send_email_message(
+        recipient_list=[tenant.email],
+        subject="Dein Wohnvertrag im Schollheim wurde gekündigt",
+        html_template_name='email/tenant-departure-termination.html',
+        context={
+            'greeting': tenant.name,
+            'departureDate': tenant.move_out.strftime('%d.%m.%Y')
+        }
+    )
+    
+    return Response(
+        {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
+        status=status.HTTP_200_OK
+    )
+
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
