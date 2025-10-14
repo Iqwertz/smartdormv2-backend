@@ -1,6 +1,7 @@
 # SmartDorm V2: Deployment Guide
 
 This document provides a rough guide to setting up and deploying the SmartDorm V2 backend (Django) and frontend (React/Vite) applications.
+There are some configurations in the firewall and nginx to allow https and communication between vms in the admin and dmz vlan, which are not covered in this document.
 
 ## Table of Contents
 1.  [Deployment Architecture Overview](#1-deployment-architecture-overview)
