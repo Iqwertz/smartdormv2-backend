@@ -110,6 +110,7 @@ department_urlpatterns = [
     path('tenant-data/', department_views.all_tenant_data_view, name='department-tenant-data'),
     path('tenant-data/<int:tenant_id>/', department_views.get_tenant_detail_view, name='department-get-tenant'),
     path('tenant-data/<int:tenant_id>/update/', department_views.update_tenant_view, name='department-update-tenant'),
+    path('tenant-data/<int:tenant_id>/terminate/', department_views.terminate_tenant_view, name='department-terminate-tenant'),
     path('tenant-data/<int:tenant_id>/delete/', department_views.delete_tenant_view, name='department-delete-tenant'),
     path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
     path('tenant-data/<int:tenant_id>/rentals/', department_views.list_tenant_rentals_view, name='department-list-rentals'),
