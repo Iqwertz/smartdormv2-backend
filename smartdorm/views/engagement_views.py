@@ -697,6 +697,20 @@ def toggle_engagement_compensate_view(request, engagement_id):
                 'totalPoints': total_points
             }
         )
+    else:
+        # Optionally notify tenant about de-compensation
+        send_email_message(
+            recipient_list=[tenant.email],
+            subject=f'Rücknahme der Referatsentlastung {engagement.department.name}',
+            html_template_name='email/tenant-engagement-decompensation.html',
+            context={
+                'greeting': tenant.name,
+                'department': engagement.department.full_name,
+                'semester': engagement.semester,
+                'points': engagement.points,
+                'totalPoints': total_points
+            }
+        )
 
     return Response({"message": f"Engagement compensation status updated to {new_compensate_status}."})
 
