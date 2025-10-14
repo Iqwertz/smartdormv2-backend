@@ -81,6 +81,15 @@ class TenantMoveSerializer(serializers.Serializer):
             raise serializers.ValidationError("Room does not exist.")
         return value
 
+class TenantTerminationSerializer(serializers.Serializer):
+    move_out_date = serializers.DateField()
+
+    def validate_move_out_date(self, value):
+        if value <= timezone.now().date():
+            raise serializers.ValidationError("Das Auszugsdatum muss in der Zukunft liegen.")
+        return value
+
+
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
