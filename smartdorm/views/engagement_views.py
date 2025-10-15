@@ -607,6 +607,15 @@ def create_engagement_admin_view(request):
         points=department.points
     )
     
+    # Update tenant's total compensated points if this engagement is compensated
+    if engagement.compensate:
+        tenant = Tenant.objects.get(id=data['tenant_id'])
+        total_points = Engagement.objects.filter(
+            tenant=tenant, compensate=True
+        ).aggregate(total=Sum('points'))['total'] or 0
+        tenant.current_points = total_points
+        tenant.save()
+    
     # Send email to tenant about new engagement
     tenant = Tenant.objects.get(id=data['tenant_id'])
     
@@ -648,9 +657,16 @@ def update_engagement_view(request, engagement_id):
 def delete_engagement_view(request, engagement_id):
     """ Deletes an engagement. """
     delete_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
+    tenant = engagement.tenant
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
     engagement.delete()
+    
+    #Recalculate tenant's total compensated points
+    total_points = Engagement.objects.filter(
+        tenant=tenant, compensate=True
+    ).aggregate(total=Sum('points'))['total'] or 0
+    
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['PUT'])
@@ -969,7 +985,7 @@ def engagement_overview_data_view(request):
     Retrieves all engagement entries, grouped by department.
     Each engagement includes minimal tenant info.
     """
-    engagement_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
+    engagement_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Tutoren", "HSV-Vertreter","Zimmerreferat","Finanzenreferat","Schlichtungsreferat","Aufnahmereferat-Nachruecker", "ADMIN"]
 
     # Query all engagements with related data
     engagements_query = Engagement.objects.select_related(
