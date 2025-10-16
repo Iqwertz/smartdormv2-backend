@@ -262,9 +262,11 @@ class DepartmentSignatureSerializer(serializers.ModelSerializer):
 
 class ClaimSerializer(serializers.ModelSerializer):
     tenant = TenantSerializer(read_only=True)
+    move_out = serializers.DateField(source='tenant.move_out', read_only=True)
+    
     class Meta:
         model = Claim
-        fields = ['id', 'created_on', 'status', 'type', 'tenant', 'external_id']
+        fields = ['id', 'created_on', 'status', 'type', 'tenant', 'move_out', 'external_id']
         
 class AdminTenantSerializer(serializers.ModelSerializer):
     """Minimal tenant info for the engagement list."""
