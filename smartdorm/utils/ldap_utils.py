@@ -1,12 +1,19 @@
 import ldap
 from django.conf import settings
 import logging
+import uuid
+import hashlib
+from passlib.hash import ldap_salted_sha1 as ssha
 
 logger = logging.getLogger(__name__)
 
-def create_ldap_user(username, password, first_name, last_name, email, group_dns=None):
+def _calculate_nt_hash(password):
+    """Calculates the NT password hash (MD4 of UTF-16LE encoded password)."""
+    return hashlib.new('md4', password.encode('utf-16le')).hexdigest().upper()
+
+def create_ldap_user(username, password, first_name, last_name, email, group_dns=None, userType='TENANT'):
     """
-    Creates a new user in the LDAP directory and adds them to specified groups.
+    Creates a new user in the LDAP directory with Samba attributes and adds them to specified groups.
     """
     if group_dns is None:
         group_dns = []
@@ -14,7 +21,6 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
     ldap_uri = settings.AUTH_LDAP_SERVER_URI
     admin_dn = settings.AUTH_LDAP_BIND_DN
     admin_password = settings.AUTH_LDAP_BIND_PASSWORD
-    # This OU should be where new users are stored.
     user_base_dn = "ou=users,dc=schollheim,dc=net"
     user_dn = f"cn={username},{user_base_dn}"
 
@@ -23,23 +29,34 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
         con.protocol_version = ldap.VERSION3
         con.simple_bind_s(admin_dn, admin_password)
 
-        # Check if user already exists #This can fail when the user was a subtenant before #todo
+        # Check if user already exists
         try:
             con.search_s(user_dn, ldap.SCOPE_BASE)
             logger.error(f"LDAP user creation failed: User '{username}' already exists.")
             raise ValueError(f"A user with the username '{username}' already exists.")
         except ldap.NO_SUCH_OBJECT:
-            pass # Good, user does not exist.
+            pass  # Good, user does not exist.
 
-        # Prepare user attributes for inetOrgPerson
+        # --- Prepare all required user attributes ---
+        ssha_password = ssha.hash(password)
+        nt_password = _calculate_nt_hash(password)
+        
+        # No hyphens, for legacy reasons
+        user_uid = str(uuid.uuid4()).replace('-', '')
+        samba_sid = str(uuid.uuid4()).replace('-', '')
+
         attrs = [
-            ('objectClass', [b'inetOrgPerson', b'top']),
+            ('objectClass', [b'inetOrgPerson', b'sambaSamAccount']),
             ('cn', [username.encode('utf-8')]),
             ('sn', [last_name.encode('utf-8')]),
             ('givenName', [first_name.encode('utf-8')]),
+            ('displayName', [f"{first_name} {last_name}".encode('utf-8')]),
             ('mail', [email.encode('utf-8')]),
-            ('userPassword', [password.encode('utf-8')]),
-            ('employeeType', [b'TENANT']), # Custom attribute used by this app
+            ('userPassword', [ssha_password.encode('utf-8')]),
+            ('employeeType', [userType.encode('utf-8')]),
+            ('uid', [user_uid.encode('utf-8')]),
+            ('sambaSID', [samba_sid.encode('utf-8')]),
+            ('sambaNTPassword', [nt_password.encode('utf-8')]),
         ]
 
         # Add the new user to LDAP
@@ -53,6 +70,7 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
                 con.modify_s(group_dn, mod_list)
                 logger.info(f"Successfully added LDAP user '{username}' to group '{group_dn}'.")
             except ldap.LDAPError as e:
+                # Log error but continue, as user creation was the main goal
                 logger.error(f"Failed to add user '{username}' to group '{group_dn}': {e}")
                 pass
 
@@ -64,6 +82,45 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
+
+def update_ldap_password(username, new_password):
+    """
+    Updates the password of an existing LDAP user, including the Samba NT hash.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # Prepare new hashed passwords
+        ssha_password = ssha.hash(new_password)
+        nt_password = _calculate_nt_hash(new_password)
+
+        # Update both userPassword and sambaNTPassword
+        mod_list = [
+            (ldap.MOD_REPLACE, 'userPassword', [ssha_password.encode('utf-8')]),
+            (ldap.MOD_REPLACE, 'sambaNTPassword', [nt_password.encode('utf-8')])
+        ]
+        con.modify_s(user_dn, mod_list)
+        logger.info(f"Successfully updated password for LDAP user: {username}")
+        return True
+
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to update password: User '{username}' does not exist in LDAP.")
+        raise ValueError(f"User '{username}' does not exist in LDAP.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during password update for '{username}': {e}")
+        raise ConnectionError(f"Could not update password in the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
             
 def add_user_to_group(username, group_dn):
     """Adds an existing LDAP user to a specified LDAP group."""
@@ -150,37 +207,6 @@ def delete_ldap_user(username):
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during deletion for '{username}': {e}")
         raise ConnectionError(f"Could not delete user from the authentication server: {e}")
-    finally:
-        if 'con' in locals() and con:
-            con.unbind_s()
-
-def update_ldap_password(username, new_password):
-    """
-    Updates the password of an existing LDAP user.
-    """
-    ldap_uri = settings.AUTH_LDAP_SERVER_URI
-    admin_dn = settings.AUTH_LDAP_BIND_DN
-    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
-    user_base_dn = "ou=users,dc=schollheim,dc=net"
-    user_dn = f"cn={username},{user_base_dn}"
-
-    try:
-        con = ldap.initialize(ldap_uri)
-        con.protocol_version = ldap.VERSION3
-        con.simple_bind_s(admin_dn, admin_password)
-
-        # Update the user's password
-        mod_list = [(ldap.MOD_REPLACE, 'userPassword', [new_password.encode('utf-8')])]
-        con.modify_s(user_dn, mod_list)
-        logger.info(f"Successfully updated password for LDAP user: {username}")
-        return True
-
-    except ldap.NO_SUCH_OBJECT:
-        logger.error(f"Failed to update password: User '{username}' does not exist in LDAP.")
-        raise ValueError(f"User '{username}' does not exist in LDAP.")
-    except ldap.LDAPError as e:
-        logger.error(f"LDAP error during password update for '{username}': {e}")
-        raise ConnectionError(f"Could not update password in the authentication server: {e}")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
