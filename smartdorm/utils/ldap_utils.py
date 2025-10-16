@@ -11,7 +11,7 @@ def _calculate_nt_hash(password):
     """Calculates the NT password hash (MD4 of UTF-16LE encoded password)."""
     return hashlib.new('md4', password.encode('utf-16le')).hexdigest().upper()
 
-def create_ldap_user(username, password, first_name, last_name, email, group_dns=None):
+def create_ldap_user(username, password, first_name, last_name, email, group_dns=None, userType='TENANT'):
     """
     Creates a new user in the LDAP directory with Samba attributes and adds them to specified groups.
     """
@@ -53,7 +53,7 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
             ('displayName', [f"{first_name} {last_name}".encode('utf-8')]),
             ('mail', [email.encode('utf-8')]),
             ('userPassword', [ssha_password.encode('utf-8')]),
-            ('employeeType', [b'TENANT']),
+            ('employeeType', [userType.encode('utf-8')]),
             ('uid', [user_uid.encode('utf-8')]),
             ('sambaSID', [samba_sid.encode('utf-8')]),
             ('sambaNTPassword', [nt_password.encode('utf-8')]),

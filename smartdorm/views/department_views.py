@@ -428,7 +428,8 @@ def create_subtenant_view(request):
         ldap_utils.create_ldap_user(
             username=username, password=password, first_name=data['name'],
             last_name=data['surname'], email=data['email'],
-            group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS
+            group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS,
+            userType="SUBTENANT"
         )
     except (ValueError, ConnectionError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
