@@ -83,7 +83,7 @@ class Rental(models.Model):
     move_in = models.DateField()
     moved_out = models.DateField()
     room = models.ForeignKey(Room, on_delete=models.DO_NOTHING, db_column='room_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
 
     class Meta:
         db_table = 't_rental'
@@ -108,7 +108,7 @@ class Engagement(models.Model):
     points = models.DecimalField(max_digits=19, decimal_places=2)
     semester = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.DO_NOTHING, db_column='department_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
 
     class Meta:
         db_table = 't_engagement'
@@ -120,7 +120,7 @@ class EngagementApplication(models.Model):
     motivation = models.TextField()
     external_id = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.DO_NOTHING, db_column='department_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
     image_name = models.CharField(max_length=255, null=True, blank=True)
     image = models.BinaryField(null=True, blank=True)
 
@@ -134,7 +134,7 @@ class Departure(models.Model):
         POSTPONED = 'POSTPONED', 'Verlängert'
         CONFIRMED = 'CONFIRMED', 'Bestätigt'
         CLOSED = 'CLOSED', 'Abgeschlossen'
-    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE, db_column='tenant_id')
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
     status = models.CharField(max_length=255, choices=Status.choices, default=Status.CREATED) # 'POSTPONED', 'CREATED', 'CLOSED', 'CONFIRMED'
@@ -149,7 +149,7 @@ class DepartmentSignature(models.Model):
     department_name = models.CharField(max_length=30)
     external_id = models.CharField(max_length=255)
     signed_on = models.DateField()
-    departure = models.ForeignKey(Departure, on_delete=models.DO_NOTHING, db_column='departure_id')
+    departure = models.ForeignKey(Departure, on_delete=models.CASCADE, db_column='departure_id')
 
     class Meta:
         db_table = 't_department_signature'
@@ -162,8 +162,8 @@ class Parcel(models.Model):
     external_id = models.CharField(max_length=255)
     picked_up = models.DateTimeField(null=True, blank=True)
     registered = models.BooleanField()
-    tenant = models.ForeignKey('Tenant', null=True, blank=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
-    subtenant = models.ForeignKey('Subtenant', null=True, blank=True, on_delete=models.DO_NOTHING, db_column='subtenant_id')
+    tenant = models.ForeignKey('Tenant', null=True, blank=True, on_delete=models.CASCADE, db_column='tenant_id')
+    subtenant = models.ForeignKey('Subtenant', null=True, blank=True, on_delete=models.CASCADE, db_column='subtenant_id')
 
     class Meta:
         db_table = 't_parcel'
@@ -177,7 +177,7 @@ class Subtenant(models.Model):
     move_out = models.DateField()
     university_confirmation = models.BooleanField()
     room = models.ForeignKey(Room, on_delete=models.DO_NOTHING, db_column='room_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
     name = models.CharField(max_length=255)
     surname = models.CharField(max_length=255)
     email = models.CharField(max_length=255)
@@ -197,7 +197,7 @@ class User(models.Model):
         managed = False
 
 class DepositBank(models.Model):
-    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE, db_column='tenant_id')
     name = models.CharField(max_length=255)
     iban = models.CharField(max_length=255)
 
@@ -220,7 +220,7 @@ class Claim(models.Model):
     external_id = models.CharField(max_length=255)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.CREATED)
     type = models.CharField(max_length=20, choices=Type.choices)
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
 
     class Meta:
         db_table = 't_claim'
