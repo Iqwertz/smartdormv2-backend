@@ -76,7 +76,7 @@ def _calculate_nt_hash(password):
     """Calculates the NT password hash (MD4 of UTF-16LE encoded password)"""
     encoded_password = password.encode('utf-16le')
     md4_hash = PurePythonMD4(encoded_password).hexdigest()
-    return md4_hash.upper()
+    return md4_hash.lower()
 
 def create_ldap_user(username, password, first_name, last_name, email, group_dns=None, userType='TENANT'):
     """
