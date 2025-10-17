@@ -7,9 +7,76 @@ from passlib.hash import ldap_salted_sha1 as ssha
 
 logger = logging.getLogger(__name__)
 
+
+# Implemented MD4 Hasing here since the servers openssl version doesnt support it.
+def _F(x, y, z): return (x & y) | (~x & z)
+def _G(x, y, z): return (x & y) | (x & z) | (y & z)
+def _H(x, y, z): return x ^ y ^ z
+
+def _left_rotate(x, n):
+    return ((x << n) & 0xffffffff) | (x >> (32 - n))
+
+class PurePythonMD4:
+    def __init__(self, message=b''):
+        self._A = 0x67452301
+        self._B = 0xefcdab89
+        self._C = 0x98badcfe
+        self._D = 0x10325476
+        self._message = message
+        self._length = len(message) * 8
+        self._process()
+
+    def _process(self):
+        message = bytearray(self._message)
+        message.append(0x80)
+        while len(message) % 64 != 56:
+            message.append(0x00)
+        message += self._length.to_bytes(8, 'little')
+
+        for i in range(0, len(message), 64):
+            chunk = message[i:i+64]
+            X = [int.from_bytes(chunk[j:j+4], 'little') for j in range(0, 64, 4)]
+            
+            AA, BB, CC, DD = self._A, self._B, self._C, self._D
+
+            # Round 1
+            s1 = [3, 7, 11, 19]
+            for j in range(16):
+                k = j
+                s = s1[j % 4]
+                t = (self._A + _F(self._B, self._C, self._D) + X[k]) & 0xffffffff
+                self._A, self._B, self._C, self._D = self._D, _left_rotate(t, s), self._B, self._C
+            
+            # Round 2
+            s2 = [3, 5, 9, 13]
+            for j in range(16):
+                k = (j // 4) + (j % 4) * 4
+                s = s2[j % 4]
+                t = (self._A + _G(self._B, self._C, self._D) + X[k] + 0x5a827999) & 0xffffffff
+                self._A, self._B, self._C, self._D = self._D, _left_rotate(t, s), self._B, self._C
+
+            # Round 3
+            s3 = [3, 9, 11, 15]
+            k_map = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+            for j in range(16):
+                k = k_map[j]
+                s = s3[j % 4]
+                t = (self._A + _H(self._B, self._C, self._D) + X[k] + 0x6ed9eba1) & 0xffffffff
+                self._A, self._B, self._C, self._D = self._D, _left_rotate(t, s), self._B, self._C
+
+            self._A = (self._A + AA) & 0xffffffff
+            self._B = (self._B + BB) & 0xffffffff
+            self._C = (self._C + CC) & 0xffffffff
+            self._D = (self._D + DD) & 0xffffffff
+
+    def hexdigest(self):
+        return ''.join(x.to_bytes(4, 'little').hex() for x in [self._A, self._B, self._C, self._D])
+
 def _calculate_nt_hash(password):
-    """Calculates the NT password hash (MD4 of UTF-16LE encoded password)."""
-    return hashlib.new('md4', password.encode('utf-16le')).hexdigest().upper()
+    """Calculates the NT password hash (MD4 of UTF-16LE encoded password)"""
+    encoded_password = password.encode('utf-16le')
+    md4_hash = PurePythonMD4(encoded_password).hexdigest()
+    return md4_hash.upper()
 
 def create_ldap_user(username, password, first_name, last_name, email, group_dns=None, userType='TENANT'):
     """
