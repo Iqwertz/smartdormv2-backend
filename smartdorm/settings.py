@@ -146,7 +146,7 @@ AUTH_LDAP_GROUP_SEARCH = LDAPSearchUnion(
 AUTH_LDAP_GROUP_TYPE = GroupOfNamesType()
 
 AUTH_LDAP_MIRROR_GROUPS = True
-
+AUTH_LDAP_ALWAYS_UPDATE_USER = True 
 AUTH_LDAP_CACHE_TIMEOUT = 3600  # 1 hour
 
 # --- Authentication Backend ---

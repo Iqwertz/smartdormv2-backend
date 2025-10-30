@@ -615,6 +615,9 @@ def create_engagement_admin_view(request):
         ).aggregate(total=Sum('points'))['total'] or 0
         tenant.current_points = total_points
         tenant.save()
+        
+
+     
     
     # Send email to tenant about new engagement
     tenant = Tenant.objects.get(id=data['tenant_id'])
@@ -629,6 +632,18 @@ def create_engagement_admin_view(request):
                 'semester': data['semester'],
             }
     )
+    
+    # Check if engagement is in current semester and update ldap roles
+    settings = GlobalAppSettings.load()
+    if data['semester'] == settings.current_semester:
+        group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+        group_cn = _get_ldap_group_name_from_department(department.full_name, tenant)
+        group_dn = f"cn={group_cn},{group_base_dn}"
+        success = ldap_utils.add_user_to_group(tenant.username, group_dn)
+        if success:
+            logger.info(f"Added user '{tenant.username}' to LDAP group '{group_cn}' for engagement '{department.name}'.")
+        else:
+            logger.error(f"Failed to add user '{tenant.username}' to LDAP group '{group_cn}' for engagement '{department.name}'.")
     response_serializer = AdminEngagementListSerializer(engagement)
     return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -657,15 +672,30 @@ def update_engagement_view(request, engagement_id):
 def delete_engagement_view(request, engagement_id):
     """ Deletes an engagement. """
     delete_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
-    tenant = engagement.tenant
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
+    tenant = engagement.tenant
     engagement.delete()
     
     #Recalculate tenant's total compensated points
     total_points = Engagement.objects.filter(
         tenant=tenant, compensate=True
     ).aggregate(total=Sum('points'))['total'] or 0
+    
+    tenant.current_points = total_points
+    tenant.save()
+    
+    #If engagement is in current semester, remove ldap role
+    settings = GlobalAppSettings.load()
+    if engagement.semester == settings.current_semester:
+        group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+        group_cn = _get_ldap_group_name_from_department(engagement.department.full_name, tenant)
+        group_dn = f"cn={group_cn},{group_base_dn}"
+        success = ldap_utils.remove_user_from_group(tenant.username, group_dn)
+        if success:
+            logger.info(f"Removed user '{tenant.username}' from LDAP group '{group_cn}' for deleted engagement '{engagement.department.name}'.")
+        else:
+            logger.error(f"Failed to remove user '{tenant.username}' from LDAP group '{group_cn}' for deleted engagement '{engagement.department.name}'.")
     
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -827,12 +857,18 @@ def export_engagement_tenants_csv(request):
     return response
 
 
-def _get_ldap_group_name_from_department(department_full_name):
+def _get_ldap_group_name_from_department(department_full_name, tenant):
     """Transforms a department full name into an LDAP group CN."""
     # Take first word if there's a space
     name = department_full_name.split(' ')[0]
-    # Replace Umlauts and make lowercase
-    name = name.lower().replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+    # Replace Umlauts
+    name = name.replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+    
+    #Special case for Flursprecher they also get assigned with the correct floor
+    if name.lower() == 'flursprecher':
+        if tenant.current_floor:
+            name += f"-{tenant.current_floor}"
+    print(name)
     return name
 
 @transaction.atomic
@@ -864,7 +900,7 @@ def update_semester_and_ldap_view(request):
     logger.info(f"Found {old_engagements.count()} engagements in old semester '{old_semester}' to process for LDAP group removal.")
     for eng in old_engagements:
         if eng.tenant.username:
-            group_cn = _get_ldap_group_name_from_department(eng.department.full_name)
+            group_cn = _get_ldap_group_name_from_department(eng.department.full_name, eng.tenant)
             group_dn = f"cn={group_cn},{group_base_dn}"
             success = ldap_utils.remove_user_from_group(eng.tenant.username, group_dn)
             if not success:
@@ -875,7 +911,7 @@ def update_semester_and_ldap_view(request):
     logger.info(f"Found {new_engagements.count()} engagements in new semester '{new_semester}' to process for LDAP group addition.")
     for eng in new_engagements:
         if eng.tenant.username:
-            group_cn = _get_ldap_group_name_from_department(eng.department.full_name)
+            group_cn = _get_ldap_group_name_from_department(eng.department.full_name, eng.tenant)
             group_dn = f"cn={group_cn},{group_base_dn}"
             success = ldap_utils.add_user_to_group(eng.tenant.username, group_dn)
             if not success:
@@ -907,7 +943,7 @@ def export_tenants_csv(request):
     Filter by floor using query parameter: ?floor=H1EG or ?floor=all
     CSV format: "firstname","lastname","email","room_number"
     """
-    export_tenants_csv.required_groups = ['Heimrat', 'ADMIN']
+    export_tenants_csv.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat","Finanzenreferat","Schlichtungsreferat", "ADMIN"]
     
     floor = request.GET.get('floor', 'all')
     
@@ -985,7 +1021,7 @@ def engagement_overview_data_view(request):
     Retrieves all engagement entries, grouped by department.
     Each engagement includes minimal tenant info.
     """
-    engagement_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Tutoren", "HSV-Vertreter","Zimmerreferat","Finanzenreferat","Schlichtungsreferat","Aufnahmereferat-Nachruecker", "ADMIN"]
+    engagement_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat","Finanzenreferat","Schlichtungsreferat", "ADMIN"]
 
     # Query all engagements with related data
     engagements_query = Engagement.objects.select_related(

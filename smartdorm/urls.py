@@ -61,7 +61,7 @@ engagement_urlpatterns = [
     path('heimrat/engagements/compensate-all/', engagement_views.compensate_all_engagements_view, name='admin-compensate-all'),
 
     # Tenant Data
-    path('heimrat/export_tenants-csv/', engagement_views.export_tenants_csv, name='export-tenants-csv'),
+    path('export_tenants-csv/', engagement_views.export_tenants_csv, name='export-tenants-csv'),
 
     # Settings for Heimrat
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
