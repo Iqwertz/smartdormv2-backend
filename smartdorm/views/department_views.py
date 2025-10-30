@@ -174,6 +174,8 @@ def move_tenant_view(request, tenant_id):
     data = serializer.validated_data
     tenant = get_object_or_404(Tenant, id=tenant_id)
     new_room = get_object_or_404(Room, id=data['room_id'])
+    new_floor = new_room.floor
+    old_floor = tenant.current_floor
     move_date = data['move_date']
 
     # Find the current rental agreement to end it
@@ -207,6 +209,21 @@ def move_tenant_view(request, tenant_id):
     tenant.save()
     
     logger.info(f"Tenant {tenant.username} moved from room {current_rental.room.name} to {new_room.name} on {move_date}.")
+
+    #Update floor LDAP group
+    try:
+        if old_floor != new_floor:
+            group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+            if old_floor:
+                old_group_dn = f"cn={old_floor},{group_base_dn}"
+                ldap_utils.remove_user_from_group(tenant.username, old_group_dn)
+                logger.info(f"Removed user '{tenant.username}' from LDAP group for floor '{old_floor}'.")
+            new_group_dn = f"cn={new_floor},{group_base_dn}"
+            ldap_utils.add_user_to_group(tenant.username, new_group_dn)
+            logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+    except Exception as e:
+        logger.error(f"Error updating LDAP groups for tenant '{tenant.username}' during move: {e}", exc_info=True)
+    
 
     return Response(TenantSerializer(tenant).data, status=status.HTTP_200_OK)
 
@@ -301,13 +318,16 @@ def create_new_tenant_view(request):
 
     # 2. Create user in LDAP
     try:
+        ldap_groups = app_config.DEFAULT_TENANT_LDAP_GROUPS
+        #Add the users FLOOR as a LDAP group
+        ldap_groups.append(f"cn={data['current_floor']},ou=groups2,dc=schollheim,dc=net")
         ldap_utils.create_ldap_user(
             username=username,
             password=password,
             first_name=data['name'],
             last_name=data['surname'],
             email=data['email'],
-            group_dns=app_config.DEFAULT_TENANT_LDAP_GROUPS
+            group_dns=ldap_groups
         )
     except (ValueError, ConnectionError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

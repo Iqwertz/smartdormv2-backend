@@ -1,7 +1,6 @@
 from django.urls import path, include
 from django.views.generic import TemplateView
 
-from .views.views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
 from .views import (
     auth_views,
     tenant_views,
@@ -61,7 +60,7 @@ engagement_urlpatterns = [
     path('heimrat/engagements/compensate-all/', engagement_views.compensate_all_engagements_view, name='admin-compensate-all'),
 
     # Tenant Data
-    path('heimrat/export_tenants-csv/', engagement_views.export_tenants_csv, name='export-tenants-csv'),
+    path('export_tenants-csv/', engagement_views.export_tenants_csv, name='export-tenants-csv'),
 
     # Settings for Heimrat
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
@@ -127,12 +126,6 @@ department_urlpatterns = [
     path('claims/', include(claim_management_urlpatterns)),
 ]
 
-# Admin-related URLs
-admin_urlpatterns = [
-    path('', TenantListCreateAPIView.as_view(), name='tenant-list-create'),
-    path('<int:pk>/', TenantDetailAPIView.as_view(), name='tenant-detail'),
-]
-
 # Shared/common URLs
 common_urlpatterns = [
     path('tenant-list/', shared_views.tenants_for_select_view, name='department-tenants-for-select'),
@@ -141,13 +134,10 @@ common_urlpatterns = [
 ]
 
 urlpatterns = [
-    path('', TemplateView.as_view(template_name="home.html")),
-    path('tenant-dashboard/', tenant_dashboard, name='tenant_dashboard'),
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
     path('api/tenants/', include((tenant_urlpatterns, 'tenants'))),
     path('api/engagements/', include((engagement_urlpatterns, 'engagements'))),
     path('api/department/', include((department_urlpatterns, 'department'))),
-    path('api/admin/', include((admin_urlpatterns, 'admin'))),
     path('api/common/', include((common_urlpatterns, 'common'))),
 ]
