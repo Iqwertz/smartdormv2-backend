@@ -444,15 +444,19 @@ def create_subtenant_view(request):
     
     password = generate_secure_password()
     
-    try:
-        ldap_utils.create_ldap_user(
-            username=username, password=password, first_name=data['name'],
-            last_name=data['surname'], email=data['email'],
-            group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS,
-            userType="SUBTENANT"
-        )
-    except (ValueError, ConnectionError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    #Determin if there was already a subtenant with the same username and skip ldap user creation if so
+    is_new_subtenant = not Subtenant.objects.filter(name=data['name'], surname=data['surname']).exists()
+         
+    if is_new_subtenant:
+        try:
+            ldap_utils.create_ldap_user(
+                username=username, password=password, first_name=data['name'],
+                last_name=data['surname'], email=data['email'],
+                group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS,
+                userType="SUBTENANT"
+            )
+        except (ValueError, ConnectionError) as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
         max_id_result = Subtenant.objects.aggregate(max_id=Max('id'))
@@ -473,17 +477,18 @@ def create_subtenant_view(request):
         logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
         return Response({"error": "Failed to save subtenant to database after creating auth entry."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    email_context = {
-        'greeting': f"Hallo {data['name']}",
-        'username': username, 'password': password,
-    }
-    email_sent = email_utils.send_email_message(
-        recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
-        html_template_name='email/user-account-creation-subtenant.html',
-        context=email_context
-    )
-    if not email_sent:
-        logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+    if is_new_subtenant:
+        email_context = {
+            'greeting': f"Hallo {data['name']}",
+            'username': username, 'password': password,
+        }
+        email_sent = email_utils.send_email_message(
+            recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
+            html_template_name='email/user-account-creation-subtenant.html',
+            context=email_context
+        )
+        if not email_sent:
+            logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
 
     return Response(SubtenantSerializer(subtenant).data, status=status.HTTP_201_CREATED)
 
