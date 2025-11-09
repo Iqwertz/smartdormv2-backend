@@ -20,9 +20,9 @@ from ..utils.email_utils import send_email_message
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant, Department
 from ..serializers import (
-    GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
+    DepartmentSerializer, GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
     HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
-    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer, TenantOverviewSerializer
+    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer, NewDepartmentSerializer, TenantOverviewSerializer
 )
 from ..utils import ldap_utils
 from rest_framework.response import Response
@@ -983,6 +983,78 @@ def export_tenants_csv(request):
         ])
     
     return response
+
+# --- Derpartment Management ---
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departments_view(request):
+    """
+    Lists all departments.
+    """
+    list_departments_view.required_groups = ['Netzwerkreferat']
+
+    departments = Department.objects.all().order_by('name')
+    serializer = DepartmentSerializer(departments, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def create_department_view(request):
+    """
+    Creates a new department.
+    """
+    create_department_view.required_groups = ['Netzwerkreferat']
+
+    serializer = NewDepartmentSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    max_id_result = Department.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+
+    department = Department.objects.create(
+        id=new_id,
+        name=serializer.validated_data['name'],
+        full_name=serializer.validated_data['full_name'],
+        points=serializer.validated_data['points'],
+        size=serializer.validated_data['size']
+    )
+    response_serializer = DepartmentSerializer(department)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def update_department_view(request, department_id):
+    """
+    Updates an existing department.
+    """
+    update_department_view.required_groups = ['Netzwerkreferat']
+
+    department = get_object_or_404(Department, id=department_id)
+    serializer = DepartmentSerializer(department, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    department = serializer.save()
+    response_serializer = DepartmentSerializer(department)
+    return Response(response_serializer.data)
+
+# ToDO: This is not completly correct yet. We need to check if there are engagements for this department first before deleting it. Now it will just fail and a user can only delete departments that dont have any engagement entries yet. But since this function isnt used often this is fine for now.
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def delete_department_view(request, department_id):
+    """
+    Deletes a department.
+    """
+    delete_department_view.required_groups = ['Netzwerkreferat']
+
+    department = get_object_or_404(Department, id=department_id)
+    department.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # --- Misc Overview Endpoints ---

@@ -67,6 +67,14 @@ engagement_urlpatterns = [
     path('heimrat/update-semester-and-ldap/', engagement_views.update_semester_and_ldap_view, name='update-semester-and-ldap'),
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
     path('heimrat/set-show-applications/', engagement_views.set_show_applications_view, name='set-show-applications'),
+    
+    #Netzwerkreferat Views
+    path('departments/list/', engagement_views.list_departments_view, name='list-departments'),
+    path('departments/create/', engagement_views.create_department_view, name='create-department'),
+    path('departments/<int:department_id>/update/', engagement_views.update_department_view, name='update-department'),
+    path('departments/<int:department_id>/delete/', engagement_views.delete_department_view, name='delete-department'),
+    
+    # Miscellaneous
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
     path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
     path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),

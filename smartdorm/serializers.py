@@ -93,7 +93,13 @@ class TenantTerminationSerializer(serializers.Serializer):
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = ['id', 'name', 'full_name']
+        fields = ['id', 'name', 'full_name', 'points', 'size']
+        
+class NewDepartmentSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    full_name = serializers.CharField(max_length=255)
+    points = serializers.DecimalField(max_digits=19, decimal_places=2, min_value=0)
+    size = serializers.IntegerField(min_value=0)
 
 class EngagementSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer(read_only=True)
