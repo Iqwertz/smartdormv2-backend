@@ -306,21 +306,24 @@ def create_new_tenant_view(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     data = serializer.validated_data
+    room = get_object_or_404(Room, name=data['current_room'])
+    floor = room.floor
 
     # 1. Generate unique username and a secure password
     base_username = (data['name'][0] + "." + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
     username = base_username
     counter = 1
-    while Tenant.objects.filter(username=username).exists():
+    while ldap_utils.ldap_username_exists(username):
         username = f"{base_username}{counter}"
         counter += 1
+    print(f"Generated unique username: {username}")
     password = generate_secure_password()
 
     # 2. Create user in LDAP
     try:
         ldap_groups = app_config.DEFAULT_TENANT_LDAP_GROUPS
         #Add the users FLOOR as a LDAP group
-        ldap_groups.append(f"cn={data['current_floor']},ou=groups2,dc=schollheim,dc=net")
+        ldap_groups.append(f"cn={floor},ou=groups2,dc=schollheim,dc=net")
         ldap_utils.create_ldap_user(
             username=username,
             password=password,
@@ -339,8 +342,6 @@ def create_new_tenant_view(request):
         
         probation_end_date = data['move_in'] + timedelta(days=app_config.PROBATION_PERIOD_DAYS)
         move_out_date = data['move_in'] + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
-        room = get_object_or_404(Room, name=data['current_room'])
-        floor = room.floor
         
         tenant = Tenant.objects.create(
             id=new_id,

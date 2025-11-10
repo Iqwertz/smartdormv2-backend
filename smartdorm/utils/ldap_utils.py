@@ -317,3 +317,35 @@ def find_ldap_user_by_email(email):
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
+            
+def ldap_username_exists(username):
+    """
+    Checks if a username exists in the LDAP directory.
+    Returns True if exists, False otherwise.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # Search for user by DN
+        try:
+            con.search_s(user_dn, ldap.SCOPE_BASE)
+            logger.info(f"LDAP username check: User '{username}' exists.")
+            return True
+        except ldap.NO_SUCH_OBJECT:
+            logger.info(f"LDAP username check: User '{username}' does not exist.")
+            return False
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during username existence check for '{username}': {e}")
+        raise ConnectionError(f"Could not check username in the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
