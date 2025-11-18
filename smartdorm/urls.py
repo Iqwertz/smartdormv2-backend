@@ -8,6 +8,7 @@ from .views import (
     engagement_views,
     parcel_views,
     shared_views,
+    budget_views
 )
 
 # Auth-related URLs
@@ -41,6 +42,17 @@ tenant_urlpatterns = [
     path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
     path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
+]
+
+# Budget URLs
+budget_urlpatterns = [
+    path('my-permissions/', budget_views.get_user_engagements_for_budget, name='budget-permissions'),
+    path('create/', budget_views.create_budget_request, name='budget-create'),
+    path('list/', budget_views.list_budget_requests, name='budget-list'),
+    path('<int:request_id>/vote/', budget_views.vote_budget_request, name='budget-vote'),
+    path('<int:request_id>/manage/', budget_views.manage_request_status, name='budget-manage'),
+    path('<int:request_id>/delete/', budget_views.delete_budget_request, name='budget-delete'),
+    path('<int:request_id>/receipt/', budget_views.get_receipt_pdf, name='budget-receipt'),
 ]
 
 # Engagement-related URLs
@@ -78,6 +90,8 @@ engagement_urlpatterns = [
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
     path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
     path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),
+
+    path('budget/', include((budget_urlpatterns, 'budget'))),
 ]
 
 

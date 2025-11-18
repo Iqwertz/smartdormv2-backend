@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, BudgetRequest, BudgetVote
 from django.utils import timezone
 from django.urls import reverse
 import base64
@@ -316,3 +316,42 @@ class TenantOverviewSerializer(TenantSerializer):
 
     class Meta(TenantSerializer.Meta):
         fields = TenantSerializer.Meta.fields + ['engagements']
+        
+        
+class BudgetVoteSerializer(serializers.ModelSerializer):
+    voter_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = BudgetVote
+        fields = ['id', 'vote', 'voter_name', 'created_at']
+
+    def get_voter_name(self, obj):
+        return f"{obj.voter.first_name} {obj.voter.last_name}"
+
+class BudgetRequestSerializer(serializers.ModelSerializer):
+    department_name = serializers.CharField(source='department.full_name', read_only=True)
+    votes = BudgetVoteSerializer(many=True, read_only=True)
+    # Don't send binary data in list view
+    has_receipt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BudgetRequest
+        fields = [
+            'id', 'type', 'status', 'requester_name', 'room_number', 'email', 'iban',
+            'amount', 'description', 'note', 'is_within_budget', 'receipt_filename',
+            'created_at', 'department', 'department_name', 'votes', 'has_receipt'
+        ]
+        read_only_fields = ['status', 'created_at', 'votes']
+
+    def get_has_receipt(self, obj):
+        return bool(obj.receipt_file)
+
+class CreateBudgetRequestSerializer(serializers.ModelSerializer):
+    receipt = serializers.FileField(write_only=True, required=True)
+
+    class Meta:
+        model = BudgetRequest
+        fields = [
+            'type', 'department', 'requester_name', 'room_number', 'email', 'iban',
+            'amount', 'description', 'note', 'is_within_budget', 'receipt'
+        ]

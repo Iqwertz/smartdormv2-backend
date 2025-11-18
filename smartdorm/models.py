@@ -299,3 +299,66 @@ class GlobalAppSettings(models.Model):
         if created:
             logger.info("Initialized new GlobalAppSettings singleton instance (id=1) with default values.")
         return obj
+
+class BudgetRequest(models.Model):
+    class Type(models.TextChoices):
+        BUDGET = 'BUDGET', 'Budgetantrag'
+        REIMBURSEMENT = 'REIMBURSEMENT', 'Rückerstattung'
+
+    class Status(models.TextChoices):
+        OPEN = 'OPEN', 'Offen'
+        APPROVED = 'APPROVED', 'Genehmigt'
+        REJECTED = 'REJECTED', 'Abgelehnt'
+        PAID = 'PAID', 'Bezahlt'
+
+    id = models.AutoField(primary_key=True)
+    type = models.CharField(max_length=20, choices=Type.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    
+    # Snapshot data (in case tenant moves/changes)
+    requester_name = models.CharField(max_length=255)
+    room_number = models.CharField(max_length=50)
+    email = models.EmailField()
+    iban = models.CharField(max_length=34)
+    
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.TextField()
+    note = models.TextField(blank=True, null=True)
+    
+    # Specific for Reimbursements
+    is_within_budget = models.BooleanField(default=False)
+    
+    # Relationships
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, db_column='department_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.SET_NULL, null=True, db_column='tenant_id')
+    
+    # File
+    receipt_file = models.BinaryField(null=True, blank=True)
+    receipt_filename = models.CharField(max_length=255, null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_budget_request'
+        managed = False # Managed=False usually implies existing DB, but for new features we want Django to manage it. 
+                        # However, based on your repo structure, you might be using managed=False everywhere. 
+                        # I will use managed=True for the migration to work, or you manually create SQL.
+                        # Given the prompt asks for a migration file, I will set managed=True for the migration to pick it up.
+        managed = True
+
+class BudgetVote(models.Model):
+    class Vote(models.TextChoices):
+        APPROVE = 'APPROVE', 'Zustimmen'
+        REJECT = 'REJECT', 'Ablehnen'
+
+    id = models.AutoField(primary_key=True)
+    request = models.ForeignKey(BudgetRequest, on_delete=models.CASCADE, related_name='votes')
+    voter = models.ForeignKey(User, on_delete=models.CASCADE) # The Django User (Heimrat member)
+    vote = models.CharField(max_length=10, choices=Vote.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_budget_vote'
+        unique_together = ('request', 'voter')
+        managed = True
