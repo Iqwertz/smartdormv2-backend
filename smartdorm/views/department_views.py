@@ -249,12 +249,11 @@ def terminate_tenant_view(request, tenant_id):
     
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
-    # Check if a departure process is already active
+    # Check if a departure process is already active. If so delete it.
     if Departure.objects.filter(tenant=tenant).exists():
-        return Response(
-            {"error": "A departure process for this tenant already exists. Please manage the existing departure instead."},
-            status=status.HTTP_409_CONFLICT
-        )
+        Departure.objects.filter(tenant=tenant).delete()
+        logger.info(f"Existing departure for tenant {tenant.username} deleted before creating a new one.")
+        
         
     # 1. Update tenant's move_out date
     tenant.move_out = move_out_date
