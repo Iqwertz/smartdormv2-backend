@@ -17,6 +17,7 @@ DEFAULT_TENANT_LDAP_GROUPS = [
     'cn=tenant,ou=roles,dc=schollheim,dc=net',
     'cn=wlan,ou=groups,dc=schollheim,dc=net',
     'cn=wiki,ou=groups,dc=schollheim,dc=net', 
+    'cn=Bewohner,ou=groups2,dc=schollheim,dc=net'
 ]
 
 # List of DNs for groups to which new subtenants are automatically added.

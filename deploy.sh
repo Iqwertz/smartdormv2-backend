@@ -46,6 +46,15 @@ python manage.py collectstatic --noinput
 # Cronjob Management for Nightly Recalculation
 echo "Configuring nightly recalculation cronjob..."
 
+if ! command -v crontab &> /dev/null; then
+    echo "Error: 'crontab' command not found. Please install the cron package on the server"
+    echo "sudo apt-get install cron"
+    echo "Then enable and start the cron service:"
+    echo "sudo systemctl enable cron"
+    echo "sudo systemctl start cron"
+    exit 1
+fi
+
 # Run at 04:00 AM every day
 CRON_CMD="0 4 * * * cd ${PROJECT_DIR} && set -a && source .env && set +a && ${VENV_PYTHON} ${MANAGE_PY} recalculate_tenant_stats >> ${LOG_DIR}/cron.log 2>&1"
 
