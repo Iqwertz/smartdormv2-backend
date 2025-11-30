@@ -61,6 +61,23 @@ This demo:
 - Retrieves all tenants to verify addition
 - Deletes the test tenant via API DELETE request
 
+## Tenant Statistics Recalculation
+
+There is a management command designed to ensure data consistency for tenant statistics (Points, Sublet duration, Extensions). This routine runs automatically every night at 04:00 AM via a cron job set up during deployment.
+
+It performs the following recalculations for **current tenants only**:
+1. **Points:** Recalculates based on the sum of points from all *compensated* engagements.
+2. **Sublet Duration:** Calculates the total days of all *confirmed* subtenants, converts to months (30 days = 1 month), and rounds to the nearest 0.5 months.
+3. **Extensions:** Recalculates based on the count of *approved* extension claims.
+
+Any discrepancies found are updated in the database and logged to `logs/smartdorm.log`.
+
+### Manual Trigger
+To run this routine manually:
+```bash
+python manage.py recalculate_tenant_stats
+```
+
 ## LDAP commands useful for testing
 Get all user attributes:
 ```bash
