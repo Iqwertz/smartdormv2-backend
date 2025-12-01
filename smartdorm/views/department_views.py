@@ -19,7 +19,7 @@ from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
-from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
+from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
 
 import logging
@@ -471,7 +471,7 @@ def create_subtenant_view(request):
         )
         
         # Update the main tenant's sublet count and adjust dates
-        update_tenant_data_from_subtenant_change(subtenant)
+        recalculate_tenant_contract_dates(subtenant.tenant)
             
     except Exception as e:
         logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
@@ -553,30 +553,11 @@ def update_subtenant_view(request, subtenant_id):
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
-        # Update the main tenant's sublet count and adjust dates if relevant fields changed
-        update_tenant_data_from_subtenant_change(subtenant)
+        
+        recalculate_tenant_contract_dates(subtenant.tenant)
+        
         return Response(SubtenantSerializer(subtenant).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-def update_tenant_data_from_subtenant_change(subtenant):
-    """
-    Updates the main tenant's sublet count and adjusts move_out and probation_end dates
-    based on the current subtenants with university confirmation.
-    """
-    main_tenant = get_object_or_404(Tenant, id=subtenant.tenant_id)
-    
-    # Calculate the sublets and the sublet duration from all sublets of the tenant that have a university confirmation
-    sublets = Subtenant.objects.filter(tenant_id=main_tenant.id, university_confirmation=True)
-    main_tenant.sublet = sublets.count()
-    sublet_duration = sum((s.move_out - s.move_in).days for s in sublets)
-    
-    # Update move_out and probation_end dates
-    main_tenant.move_out += timedelta(days=sublet_duration)
-    if main_tenant.probation_end > subtenant.move_in:
-        main_tenant.probation_end += timedelta(days=sublet_duration)
-    
-    main_tenant.save()
-    logger.info(f"Updated main tenant '{main_tenant.username}' sublet count to {main_tenant.sublet} and adjusted move_out to {main_tenant.move_out} due to subtenant change.")
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
@@ -597,6 +578,7 @@ def delete_subtenant_view(request, subtenant_id):
     try:
         ldap_utils.delete_ldap_user(username_to_delete)
         subtenant.delete()
+        recalculate_tenant_contract_dates(tenant)
         logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
         return Response(status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
@@ -1067,17 +1049,18 @@ def process_claim_decision_view(request, claim_id):
         claim.save()
         
         tenant.extension = (tenant.extension or 0) + 1
+        tenant.save()
         
         new_move_out_date_str = request.data.get('move_out_date')
         if new_move_out_date_str:
             try:
                 tenant.move_out = date.fromisoformat(new_move_out_date_str)
+                tenant.save()
             except (ValueError, TypeError):
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            tenant.move_out += timedelta(days=app_config.DEFAULT_EXTENSION_DURATION_DAYS)
-        
-        tenant.save()
+            recalculate_tenant_contract_dates(tenant)
+
         Departure.objects.filter(tenant=tenant).delete()
         
         #Send email to tenant

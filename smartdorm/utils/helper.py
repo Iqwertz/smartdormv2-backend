@@ -1,7 +1,8 @@
 import secrets
 import string
 from decimal import Decimal
-from datetime import date
+import calendar
+from datetime import timedelta, date
 import uuid
 import logging
 import re
@@ -238,3 +239,83 @@ def create_and_notify_departure_signatures(departure):
     # Will be removed (hopefully) when the new smartdorm is fully used, since then all departures should automatically have the required signatures
     _ensure_signatures_for_all_confirmed_departures()
     # --- END TEMPORARY MIGRATION STEP ---
+    
+def get_closest_end_of_month(target_date: date) -> date:
+    """
+    Finds the closest end-of-month date to the target_date.
+    Example: 
+    - Jan 28 -> Jan 31 (Closer to end of Jan than end of Dec)
+    - Feb 02 -> Jan 31 (Closer to end of Jan than end of Feb)
+    """
+    # 1. End of the current month of the target_date
+    last_day_current_month = calendar.monthrange(target_date.year, target_date.month)[1]
+    eom_current = date(target_date.year, target_date.month, last_day_current_month)
+    
+    # 2. End of the previous month
+    # Calculate first day of current month, subtract one day to get to prev month
+    first_day_current = date(target_date.year, target_date.month, 1)
+    eom_previous = first_day_current - timedelta(days=1)
+    
+    # Calculate differences
+    diff_current = abs((eom_current - target_date).days)
+    diff_previous = abs((eom_previous - target_date).days)
+    
+    if diff_previous < diff_current:
+        return eom_previous
+    return eom_current
+
+def recalculate_tenant_contract_dates(tenant) -> None:
+    """
+    Recalculates move_out and probation_end dates from scratch based on:
+    1. Base contract duration
+    2. Confirmed subtenants (adds duration)
+    3. Approved extensions (adds fixed duration per extension)
+    4. Rounds move_out to the closest end of month.
+    """
+    from ..models import Subtenant
+    
+    # Base Dates
+    base_move_out = tenant.move_in + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
+    base_probation = tenant.move_in + timedelta(days=app_config.PROBATION_PERIOD_DAYS)
+    
+    # Calculate confirmed subtenant duration
+    confirmed_subtenants = Subtenant.objects.filter(
+        tenant=tenant, 
+        university_confirmation=True
+    )
+    
+    total_sublet_days = 0
+    for sub in confirmed_subtenants:
+        # Ensure we don't calculate negative days if dates are messed up
+        if sub.move_out > sub.move_in:
+            duration = (sub.move_out - sub.move_in).days
+            total_sublet_days += duration
+            
+    # Calculate extension duration
+    extension_count = tenant.extension or 0
+    total_extension_days = extension_count * app_config.DEFAULT_EXTENSION_DURATION_DAYS
+    
+    # Apply durations
+    # Subletting pauses residence time, extending both contract and probation
+    # Extensions only extend the contract end, not probation
+    
+    calculated_probation_end = base_probation + timedelta(days=total_sublet_days)
+    
+    raw_move_out = base_move_out + timedelta(days=total_sublet_days + total_extension_days)
+    
+    # Round move_out to closest end of month
+    final_move_out = get_closest_end_of_month(raw_move_out)
+    
+    # Apply changes if diff exists
+    changes = []
+    if tenant.probation_end != calculated_probation_end:
+        changes.append(f"Probation: {tenant.probation_end} -> {calculated_probation_end}")
+        tenant.probation_end = calculated_probation_end
+        
+    if tenant.move_out != final_move_out:
+        changes.append(f"MoveOut: {tenant.move_out} -> {final_move_out}")
+        tenant.move_out = final_move_out
+        
+    if changes:
+        tenant.save()
+        logger.info(f"Recalculated dates for {tenant.username}: {', '.join(changes)}")

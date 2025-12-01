@@ -56,7 +56,7 @@ if ! command -v crontab &> /dev/null; then
 fi
 
 # Run at 04:00 AM every day
-CRON_CMD="0 4 * * * cd ${PROJECT_DIR} && set -a && source .env && set +a && ${VENV_PYTHON} ${MANAGE_PY} recalculate_tenant_stats >> ${LOG_DIR}/cron.log 2>&1"
+CRON_CMD="0 4 * * * /bin/bash -c 'cd ${PROJECT_DIR} && set -a && source .env && set +a && venv/bin/python manage.py recalculate_tenant_stats' >> ${LOG_DIR}/cron.log 2>&1"
 
 # 1. Dump current crontab
 # 2. Grep -v removes any existing lines containing 'recalculate_tenant_stats' (cleanup old jobs)
