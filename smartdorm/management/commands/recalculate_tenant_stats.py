@@ -80,17 +80,19 @@ class Command(BaseCommand):
                 # --- Sublet Duration (Months) ---
                 total_sublet_days = 0
                 for sub in tenant.subtenant_set.all():
-                    if sub.move_out and sub.move_in: #sub.university_confirmation and 
+                    if sub.move_out and sub.move_in:
                         duration = (sub.move_out - sub.move_in).days
                         if duration > 0:
                             total_sublet_days += duration
 
                 calculated_sublet_months = 0.0
-                if total_sublet_days > 0:
+                if total_sublet_days > 0: 
+                    # round to nearest half month
                     calculated_sublet_months = round((total_sublet_days / 30.0) * 2) / 2
                 
                 if (tenant.sublet or 0.0) != calculated_sublet_months:
-                    changes.append(f"Sublet: {tenant.sublet} -> {calculated_sublet_months}")
+                    # Print the year of the last sublet entry of that person                    
+                    changes.append(f"Sublet: {tenant.sublet} -> {calculated_sublet_months} (days: {total_sublet_days})")
                     tenant.sublet = calculated_sublet_months
 
                 # --- Extensions ---
@@ -100,9 +102,10 @@ class Command(BaseCommand):
                 if (tenant.extension or 0) != calculated_extensions:
                     changes.append(f"Extensions: {tenant.extension} -> {calculated_extensions}")
                     tenant.extension = calculated_extensions
-
+                
                 if changes:
-                    #tenant.save(update_fields=['current_points', 'sublet', 'extension'])
+                    if(not self.dry_run):
+                        tenant.save(update_fields=['current_points', 'sublet', 'extension'])
                     updates_count += 1
                     logger.info(f"Stats Updated for {tenant.username}: {', '.join(changes)}")
 
