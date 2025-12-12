@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension
 from django.utils import timezone
 from django.urls import reverse
 import base64
@@ -316,3 +316,23 @@ class TenantOverviewSerializer(TenantSerializer):
 
     class Meta(TenantSerializer.Meta):
         fields = TenantSerializer.Meta.fields + ['engagements']
+        
+        
+class TerminationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Termination
+        fields = ['tenant', 'date', 'note', 'created_at']
+        read_only_fields = ['created_at', 'tenant']
+
+class DepartmentExtensionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DepartmentExtension
+        fields = ['id', 'tenant', 'months', 'note', 'created_at']
+        read_only_fields = ['id', 'created_at', 'tenant']
+
+class DepartmentExtensionCreateSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = DepartmentExtension
+        fields = ['tenant_id', 'months', 'note']
