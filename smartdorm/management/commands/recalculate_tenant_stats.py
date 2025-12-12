@@ -35,10 +35,13 @@ class Command(BaseCommand):
         
         # Load Global Settings for Semester checks
         try:
+            print("Loading GlobalAppSettings...")
             app_settings = GlobalAppSettings.load()
+            print(app_settings)
             current_semester = app_settings.current_semester
         except Exception:
             logger.error("Could not load GlobalAppSettings. Aborting.")
+            logger.error("Traceback:", exc_info=True)
             return
 
         # Fetch Tenants
@@ -90,8 +93,7 @@ class Command(BaseCommand):
                     # round to nearest half month
                     calculated_sublet_months = round((total_sublet_days / 30.0) * 2) / 2
                 
-                if (tenant.sublet or 0.0) != calculated_sublet_months:
-                    # Print the year of the last sublet entry of that person                    
+                if (tenant.sublet or 0.0) != calculated_sublet_months:                
                     changes.append(f"Sublet: {tenant.sublet} -> {calculated_sublet_months} (days: {total_sublet_days})")
                     tenant.sublet = calculated_sublet_months
 
@@ -107,9 +109,9 @@ class Command(BaseCommand):
                     if(not self.dry_run):
                         tenant.save(update_fields=['current_points', 'sublet', 'extension'])
                     updates_count += 1
-                    logger.info(f"Stats Updated for {tenant.username}: {', '.join(changes)}")
-
-        logger.info(f"Stats calculation complete. {updates_count} tenants updated.")
+                    self.stdout.write(f"Stats Updated for {tenant.username}: {', '.join(changes)}")
+                    
+        self.stdout.write(f"Stats calculation complete. {updates_count} tenants updated.")
 
     def sync_ldap_roles(self, tenants, current_semester):
         """Synchronizes LDAP groups based on tenant status and engagements."""
@@ -163,7 +165,7 @@ class Command(BaseCommand):
                         if fl:
                             managed_groups_dn.add(f"cn=flursprecher-{fl},ou=groups2,dc=schollheim,dc=net".lower())
 
-            logger.info(f"Identified {len(managed_groups_dn)} managed system groups.")
+            self.stdout.write(f"Identified {len(managed_groups_dn)} managed system groups.")
 
             # --- 2. Process Tenants ---
             for tenant in tenants:

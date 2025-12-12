@@ -53,6 +53,7 @@ sudo systemctl enable redis-server
 Run `scripts/tenant_api_demo.py` script using:
 
 ```bash
+source .env
 python scripts/tenant_api_demo.py
 ```
 

@@ -9,6 +9,7 @@ import re
 
 from django.db import transaction
 from django.db.models import Max
+from django.utils import timezone
 
 from ..models import DepartmentSignature, Departure
 from .. import config as app_config
@@ -264,7 +265,7 @@ def get_closest_end_of_month(target_date: date) -> date:
         return eom_previous
     return eom_current
 
-def recalculate_tenant_contract_dates(tenant) -> None:
+def recalculate_tenant_contract_dates(tenant, dry_run=False) -> list:
     """
     Recalculates move_out and probation_end dates from scratch based on:
     1. Base contract duration
@@ -296,26 +297,36 @@ def recalculate_tenant_contract_dates(tenant) -> None:
     total_extension_days = extension_count * app_config.DEFAULT_EXTENSION_DURATION_DAYS
     
     # Apply durations
-    # Subletting pauses residence time, extending both contract and probation
-    # Extensions only extend the contract end, not probation
+    # Only update probation_end if it is in the future
+    calculated_probation_end = tenant.probation_end
+    if tenant.probation_end > timezone.now().date():
+        calculated_probation_end = base_probation + timedelta(days=total_sublet_days)
+        # Round probation_end to closest end of month
+        calculated_probation_end = get_closest_end_of_month(calculated_probation_end)
     
-    calculated_probation_end = base_probation + timedelta(days=total_sublet_days)
-    
+    # Logic: Base + Sublet Days + Extension Days
     raw_move_out = base_move_out + timedelta(days=total_sublet_days + total_extension_days)
     
     # Round move_out to closest end of month
     final_move_out = get_closest_end_of_month(raw_move_out)
+
     
     # Apply changes if diff exists
     changes = []
     if tenant.probation_end != calculated_probation_end:
-        changes.append(f"Probation: {tenant.probation_end} -> {calculated_probation_end}")
+        #Only log if change is bigger than 3 days
+        if abs((tenant.probation_end - calculated_probation_end).days) > 3:
+            changes.append(f"Probation: {tenant.probation_end} -> {calculated_probation_end}")
         tenant.probation_end = calculated_probation_end
         
     if tenant.move_out != final_move_out:
-        changes.append(f"MoveOut: {tenant.move_out} -> {final_move_out}")
+        if abs((tenant.move_out - final_move_out).days) > 3:
+            changes.append(f"MoveOut: {tenant.move_out} -> {final_move_out}")
         tenant.move_out = final_move_out
         
     if changes:
-        tenant.save()
-        logger.info(f"Recalculated dates for {tenant.username}: {', '.join(changes)}")
+        if not dry_run:
+            tenant.save()
+            logger.info(f"Recalculated dates for {tenant.username}: {', '.join(changes)}")
+            
+    return changes
