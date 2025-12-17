@@ -9,6 +9,7 @@ from .views import (
     parcel_views,
     shared_views,
     attendance_views,
+    printing_views,
 )
 
 # Auth-related URLs
@@ -43,6 +44,21 @@ tenant_urlpatterns = [
     path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
     path('my-contract-calculation/', tenant_views.my_contract_calculation_view, name='my-contract-calculation'),
+
+    # Print & Scan URLs - IMPORTANT: device-status MUST come before sessions/<str:session_id> to avoid URL conflicts
+    path('printing/device-status/', printing_views.device_status_view, name='printing-device-status'),
+    path('printing/my-costs/', printing_views.my_costs_view, name='printing-my-costs'),
+    path('printing/my-sessions/', printing_views.my_sessions_view, name='printing-my-sessions'),
+    path('printing/my-scans/', printing_views.my_scans_view, name='printing-my-scans'),
+    path('printing/sessions/start/', printing_views.start_session_view, name='printing-sessions-start'),
+    # NOTE: sessions/<str:session_id> must come AFTER all other specific printing paths
+    path('printing/sessions/<str:session_id>/', printing_views.session_detail_view, name='printing-sessions-detail'),
+    path('printing/sessions/<str:session_id>/end/', printing_views.end_session_view, name='printing-sessions-end'),
+    path('printing/sessions/<str:session_id>/print/', printing_views.print_job_view, name='printing-sessions-print'),
+    path('printing/sessions/<str:session_id>/jobs/', printing_views.session_jobs_view, name='printing-sessions-jobs'),
+    path('printing/sessions/<str:session_id>/scans/', printing_views.session_scans_view, name='printing-sessions-scans'),
+    path('printing/sessions/<str:session_id>/scan/start/', printing_views.start_scan_view, name='printing-sessions-scan-start'),
+    path('printing/scans/<str:scan_id>/download/', printing_views.download_scan_view, name='printing-scans-download'),
 ]
 
 # Engagement-related URLs
@@ -173,6 +189,21 @@ attendance_urlpatterns = [
     path('my-history/', attendance_views.my_attendance_history_view, name='attendance-my-history'),
 ]
 
+# Print & Scan URLs (for Pi and Department)
+printing_urlpatterns = [
+    # Pi endpoints (no auth)
+    path('active-session/', printing_views.active_session_view, name='printing-active-session'),
+    path('scans/', printing_views.upload_scan_view, name='printing-upload-scan'),
+    # Department management endpoints
+    path('device/<int:device_id>/overview/', printing_views.device_overview_view, name='printing-device-overview'),
+    path('device/<int:device_id>/statistics/', printing_views.device_statistics_view, name='printing-device-statistics'),
+    path('device/<int:device_id>/settings/', printing_views.device_settings_update_view, name='printing-device-settings'),
+    path('device/<int:device_id>/toggle-active/', printing_views.device_toggle_active_view, name='printing-device-toggle-active'),
+    path('device/<int:device_id>/toggle-sessions/', printing_views.device_toggle_sessions_view, name='printing-device-toggle-sessions'),
+    path('device/<int:device_id>/terminate-session/', printing_views.device_terminate_session_view, name='printing-device-terminate-session'),
+    path('device/<int:device_id>/history/', printing_views.device_history_view, name='printing-device-history'),
+]
+
 urlpatterns = [
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
@@ -181,4 +212,5 @@ urlpatterns = [
     path('api/department/', include((department_urlpatterns, 'department'))),
     path('api/common/', include((common_urlpatterns, 'common'))),
     path('api/attendance/', include((attendance_urlpatterns, 'attendance'))),
+    path('api/printing/', include((printing_urlpatterns, 'printing'))),
 ]

@@ -1,0 +1,18 @@
+[Unit]
+Description=SmartDorm Scan Service
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/srv/smartdorm
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/srv/smartdorm/venv/bin"
+Environment="SMARTDORM_API_BASE=http://smartdormv2-api-dev.schollheim.net/api"
+Environment="SCAN_DEVICE=airscan:w0:Samsung C1860 Series (SEC8425192A15C2)"
+ExecStart=/srv/smartdorm/venv/bin/python /srv/smartdorm/scan_service.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
