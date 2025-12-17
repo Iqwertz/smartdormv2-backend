@@ -9,7 +9,7 @@ LOCAL_ENV = os.environ.get("LOCAL_ENV", "false").lower() in ("true", "1", "yes")
 PRODUCTION_MODE = os.environ.get("PRODUCTION", "false").lower() in ("true", "1", "yes")
 DEBUG = not PRODUCTION_MODE
 
-ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
+ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', '192.168.0.106', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -71,6 +71,11 @@ USE_I18N = True
 USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Media files (for scan storage)
+MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = '/media/'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # --- Session Configuration ---
@@ -82,6 +87,14 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 # ICS Calendar
 NEXTCLOUD_ICS_URL = os.environ.get("NEXTCLOUD_ICS_URL", "https://cloud.schollheim.net/remote.php/dav/public-calendars/8BXCQ5JxXGGQzr2w/?export") #Used to generate a preview to the calendar
 NEXTCLOUD_CALENDAR_URL = os.environ.get("NEXTCLOUD_CALENDAR_URL", "https://cloud.schollheim.net/apps/calendar/p/8BXCQ5JxXGGQzr2w/dayGridMonth/now") # Used to redirect users to the full calendar
+
+# CUPS Print Server Configuration
+CUPS_SERVER = os.environ.get("CUPS_SERVER", None)  # IP or hostname of Raspberry Pi (e.g., "192.168.1.100")
+CUPS_PRINTER_NAME = os.environ.get("CUPS_PRINTER_NAME", None)  # CUPS printer name (e.g., "Samsung_C1860_Series")
+
+# Pi HTTP service for scans
+PI_SCAN_SERVICE_URL = os.environ.get("PI_SCAN_SERVICE_URL", "http://localhost:8000")
+PI_SCAN_SERVICE_TIMEOUT = int(os.environ.get("PI_SCAN_SERVICE_TIMEOUT", "300"))  # 5 minutes for scan
 
 # --- Email Configuration ---
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

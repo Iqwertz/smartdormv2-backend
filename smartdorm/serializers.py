@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Device, PrintSession, PrintJob, Scan
 from django.utils import timezone
 from django.urls import reverse
 import base64
@@ -316,3 +316,127 @@ class TenantOverviewSerializer(TenantSerializer):
 
     class Meta(TenantSerializer.Meta):
         fields = TenantSerializer.Meta.fields + ['engagements']
+
+# ============================================================================
+# Print & Scan System Serializers
+# ============================================================================
+
+class DeviceSerializer(serializers.ModelSerializer):
+    """Serializer for Device model"""
+    department_name = serializers.CharField(source='department.name', read_only=True)
+    
+    class Meta:
+        model = Device
+        fields = [
+            'id', 'name', 'location', 'department', 'department_name',
+            'is_active', 'allow_new_sessions', 'price_per_page',
+            'max_session_duration_minutes', 'cups_printer_name',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+class DeviceSettingsUpdateSerializer(serializers.Serializer):
+    """Serializer for updating device settings (price, session duration, etc.)"""
+    price_per_page = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
+    max_session_duration_minutes = serializers.IntegerField(required=False, min_value=1)
+
+class DeviceToggleSerializer(serializers.Serializer):
+    """Serializer for toggling device active/sessions (empty, just for consistency)"""
+    pass
+
+class PrintSessionSerializer(serializers.ModelSerializer):
+    """Serializer for PrintSession model"""
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    device_name = serializers.CharField(source='device.name', read_only=True)
+    
+    class Meta:
+        model = PrintSession
+        fields = [
+            'id', 'external_id', 'tenant', 'tenant_name', 'device', 'device_name',
+            'started_at', 'ended_at', 'status'
+        ]
+        read_only_fields = ['id', 'external_id', 'started_at']
+    
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return obj.tenant.get_full_name()
+        return None
+
+class PrintSessionDetailSerializer(PrintSessionSerializer):
+    """Extended serializer with related jobs and scans"""
+    jobs = serializers.SerializerMethodField(read_only=True)
+    scans = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta(PrintSessionSerializer.Meta):
+        fields = PrintSessionSerializer.Meta.fields + ['jobs', 'scans']
+    
+    def get_jobs(self, obj):
+        jobs = PrintJob.objects.filter(session=obj).order_by('-created_at')
+        return PrintJobSerializer(jobs, many=True).data
+    
+    def get_scans(self, obj):
+        scans = Scan.objects.filter(session=obj).order_by('-scanned_at')
+        return ScanSerializer(scans, many=True).data
+
+class PrintJobSerializer(serializers.ModelSerializer):
+    """Serializer for PrintJob model"""
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = PrintJob
+        fields = [
+            'id', 'external_id', 'session', 'tenant', 'tenant_name', 'device',
+            'filename', 'pages', 'cost', 'status', 'created_at', 'completed_at',
+            'error_message', 'cups_job_id'
+        ]
+        read_only_fields = [
+            'id', 'external_id', 'tenant', 'device', 'pages', 'cost',
+            'created_at', 'completed_at', 'cups_job_id'
+        ]
+    
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return obj.tenant.get_full_name()
+        return None
+
+class ScanSerializer(serializers.ModelSerializer):
+    """Serializer for Scan model"""
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    download_url = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = Scan
+        fields = [
+            'id', 'external_id', 'session', 'tenant', 'tenant_name', 'device',
+            'filename', 'file_path', 'scanned_at', 'download_url'
+        ]
+        read_only_fields = ['id', 'external_id', 'tenant', 'device', 'scanned_at']
+    
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return obj.tenant.get_full_name()
+        return None
+    
+    def get_download_url(self, obj):
+        # URL for download endpoint
+        return f'/api/tenants/printing/scans/{obj.external_id}/download/'
+
+class DeviceStatusSerializer(serializers.Serializer):
+    """Serializer for device status response"""
+    device_id = serializers.IntegerField()
+    device_name = serializers.CharField()
+    location = serializers.CharField()
+    is_active = serializers.BooleanField()
+    allow_new_sessions = serializers.BooleanField()
+    price_per_page = serializers.DecimalField(max_digits=5, decimal_places=2)
+    active_session = serializers.DictField(required=False, allow_null=True)
+    available = serializers.BooleanField()
+
+class MyCostsSerializer(serializers.Serializer):
+    """Serializer for user costs overview"""
+    total_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    this_month_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total_pages = serializers.IntegerField()
+    this_month_pages = serializers.IntegerField()
+    total_jobs = serializers.IntegerField()
+    this_month_jobs = serializers.IntegerField()
