@@ -359,3 +359,97 @@ def recalculate_tenant_contract_dates(tenant, dry_run=False) -> list:
             logger.info(f"Recalculated dates for {tenant.username}: {', '.join(changes)}")
             
     return changes
+
+def get_contract_date_breakdown(tenant) -> dict:
+    """
+    Returns a dictionary containing all factors contributing to the tenant's move_out date.
+    Used for frontend display and verification.
+    """
+    
+    # 1. Base Data
+    base_move_out = tenant.move_in + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
+    
+    # 2. Standard Extensions (Claims)
+    extension_count = tenant.extension or 0
+    total_extension_days = extension_count * app_config.DEFAULT_EXTENSION_DURATION_DAYS
+    
+    # 3. Subtenancies
+    confirmed_subtenants = tenant.subtenant_set.filter(university_confirmation=True)
+    total_sublet_days = 0
+    sublet_details = []
+    
+    for sub in confirmed_subtenants:
+        if sub.move_out > sub.move_in:
+            duration = (sub.move_out - sub.move_in).days
+            total_sublet_days += duration
+            sublet_details.append({
+                "start": sub.move_in,
+                "end": sub.move_out,
+                "days": duration
+            })
+            
+    # 4. Department Extensions
+    dept_extensions = tenant.department_extensions.all()
+    dept_months_sum = dept_extensions.aggregate(total=Sum('months'))['total'] or 0
+    dept_ext_details = []
+    for ext in dept_extensions:
+        dept_ext_details.append({
+            "months": ext.months,
+            "note": ext.note,
+            "created_at": ext.created_at
+        })
+
+    # 5. Calculation Logic (The "Raw" Date)
+    raw_date = base_move_out + timedelta(days=total_sublet_days + total_extension_days)
+    
+    # Apply months logic using relativedelta
+    raw_date_with_months = raw_date + relativedelta(months=dept_months_sum)
+    
+    # 6. Final End-of-Month Snap
+    calculated_move_out = get_closest_end_of_month(raw_date_with_months)
+
+    # 7. Check for Termination (The Override)
+    is_terminated = False
+    termination_date = None
+    termination_note = None
+    
+    try:
+        termination = tenant.termination_record
+        is_terminated = True
+        termination_date = termination.date
+        termination_note = termination.note
+        final_effective_date = termination_date
+    except (ObjectDoesNotExist, AttributeError):
+        final_effective_date = calculated_move_out
+
+    return {
+        "move_in_date": tenant.move_in,
+        "base_contract": {
+            "duration_days": app_config.DEFAULT_CONTRACT_DURATION_DAYS,
+            "projected_end": base_move_out
+        },
+        "standard_extensions": {
+            "count": extension_count,
+            "days_per_extension": app_config.DEFAULT_EXTENSION_DURATION_DAYS,
+            "total_added_days": total_extension_days
+        },
+        "subtenancies": {
+            "total_added_days": total_sublet_days,
+            "count": len(sublet_details),
+            "details": sublet_details
+        },
+        "department_extensions": {
+            "total_months": dept_months_sum,
+            "details": dept_ext_details
+        },
+        "calculation_steps": {
+            "raw_date_before_snap": raw_date_with_months,
+            "calculated_end_of_month": calculated_move_out
+        },
+        "termination": {
+            "is_active": is_terminated,
+            "date": termination_date,
+            "note": termination_note
+        },
+        "final_move_out_date": final_effective_date
+    }

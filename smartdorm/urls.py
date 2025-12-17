@@ -41,6 +41,7 @@ tenant_urlpatterns = [
     path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
     path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
+    path('my-contract-calculation/', tenant_views.my_contract_calculation_view, name='my-contract-calculation'),
 ]
 
 # Engagement-related URLs
