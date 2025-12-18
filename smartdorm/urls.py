@@ -42,12 +42,13 @@ tenant_urlpatterns = [
     path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
     path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
-    # Print & Scan URLs
+    # Print & Scan URLs - IMPORTANT: device-status MUST come before sessions/<str:session_id> to avoid URL conflicts
     path('printing/device-status/', printing_views.device_status_view, name='printing-device-status'),
     path('printing/my-costs/', printing_views.my_costs_view, name='printing-my-costs'),
     path('printing/my-sessions/', printing_views.my_sessions_view, name='printing-my-sessions'),
     path('printing/my-scans/', printing_views.my_scans_view, name='printing-my-scans'),
     path('printing/sessions/start/', printing_views.start_session_view, name='printing-sessions-start'),
+    # NOTE: sessions/<str:session_id> must come AFTER all other specific printing paths
     path('printing/sessions/<str:session_id>/', printing_views.session_detail_view, name='printing-sessions-detail'),
     path('printing/sessions/<str:session_id>/end/', printing_views.end_session_view, name='printing-sessions-end'),
     path('printing/sessions/<str:session_id>/print/', printing_views.print_job_view, name='printing-sessions-print'),
@@ -161,6 +162,7 @@ printing_urlpatterns = [
     path('active-session/', printing_views.active_session_view, name='printing-active-session'),
     path('scans/', printing_views.upload_scan_view, name='printing-upload-scan'),
     # Department management endpoints
+    path('tenant-billing-overview/', printing_views.tenant_billing_overview_view, name='printing-tenant-billing-overview'),
     path('device/<int:device_id>/overview/', printing_views.device_overview_view, name='printing-device-overview'),
     path('device/<int:device_id>/statistics/', printing_views.device_statistics_view, name='printing-device-statistics'),
     path('device/<int:device_id>/settings/', printing_views.device_settings_update_view, name='printing-device-settings'),

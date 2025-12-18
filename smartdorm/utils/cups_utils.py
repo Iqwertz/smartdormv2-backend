@@ -44,8 +44,37 @@ def get_cups_connection() -> Optional[Any]:
         return None
 
 
+def get_printer_options(printer_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Gets available options for a printer.
+    Useful for debugging which color mode options are supported.
+    
+    Args:
+        printer_name: Name of the printer in CUPS
+        
+    Returns:
+        Dictionary with printer options or None if failed
+    """
+    conn = get_cups_connection()
+    if not conn:
+        return None
+    
+    try:
+        printers = conn.getPrinters()
+        if printer_name not in printers:
+            logger.error(f"Printer '{printer_name}' not found in CUPS")
+            return None
+        
+        # Get printer attributes
+        attrs = conn.getPrinterAttributes(printer_name)
+        return attrs
+    except Exception as e:
+        logger.error(f"Failed to get printer options: {e}")
+        return None
+
+
 def submit_print_job(printer_name: str, file_data: bytes, filename: str, 
-                     title: Optional[str] = None) -> Optional[str]:
+                     title: Optional[str] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     Submits a print job to CUPS.
     
@@ -54,6 +83,10 @@ def submit_print_job(printer_name: str, file_data: bytes, filename: str,
         file_data: PDF data as bytes
         filename: Name of the file (for CUPS info)
         title: Optional title for the print job
+        options: Optional dictionary of CUPS print options:
+                 - ColorModel: "Gray" for black & white, "Color" or "CMYK" for color
+                 - copies: Number of copies (string)
+                 - page-ranges: Page range (e.g. "1-5" for pages 1 to 5)
         
     Returns:
         CUPS Job ID as string, or None if failed
@@ -80,13 +113,16 @@ def submit_print_job(printer_name: str, file_data: bytes, filename: str,
         
         try:
             job_title = title or filename
+            # Default options
+            print_options = options or {}
+            logger.info(f"Submitting print job with options: {print_options}")
             job_id = conn.printFile(
                 printer_name,
                 tmp_path,
                 job_title,
-                {}
+                print_options
             )
-            logger.info(f"Print job submitted successfully. Job ID: {job_id}, Printer: {printer_name}, File: {filename}")
+            logger.info(f"Print job submitted successfully. Job ID: {job_id}, Printer: {printer_name}, File: {filename}, Options: {print_options}")
             return str(job_id)
         finally:
             # Delete temporary file
@@ -139,13 +175,20 @@ def get_job_status(printer_name: str, job_id: str) -> Optional[Dict[str, Any]]:
                 if isinstance(job_dict_key, int) and job_dict_key == job_id_int:
                     # Job data is directly available
                     if isinstance(job_dict_value, dict):
-                        # Page count: job-media-sheets-completed (number of pages) or job-impressions-completed (number of pages)
-                        pages = job_dict_value.get('job-media-sheets-completed') or job_dict_value.get('job-impressions-completed') or None
+                        # Page count: Prefer job-impressions-completed (logical pages) over job-media-sheets-completed (physical sheets)
+                        # job-impressions-completed = number of pages printed (includes copies)
+                        # job-media-sheets-completed = physical sheets of paper (may be less with duplex)
+                        sheets = job_dict_value.get('job-media-sheets-completed')
+                        impressions = job_dict_value.get('job-impressions-completed')
+                        pages = impressions or sheets or None  # Prefer impressions (pages) over sheets (physical paper)
                         if pages:
                             try:
                                 pages = int(pages)
+                                logger.debug(f"Job {job_id_int}: sheets={sheets}, impressions={impressions}, using pages={pages}")
                             except (ValueError, TypeError):
                                 pages = None
+                        else:
+                            logger.warning(f"Job {job_id_int}: No page count available (sheets={sheets}, impressions={impressions})")
                         return {
                             'job_state': job_dict_value.get('job-state', 0),
                             'job_state_reasons': job_dict_value.get('job-state-reasons', []),
@@ -158,12 +201,17 @@ def get_job_status(printer_name: str, job_id: str) -> Optional[Dict[str, Any]]:
                 if isinstance(job_dict_value, dict):
                     job_id_in_data = job_dict_value.get('job-id')
                     if job_id_in_data == job_id_int:
-                        pages = job_dict_value.get('job-media-sheets-completed') or job_dict_value.get('job-impressions-completed') or None
+                        sheets = job_dict_value.get('job-media-sheets-completed')
+                        impressions = job_dict_value.get('job-impressions-completed')
+                        pages = impressions or sheets or None  # Prefer impressions over sheets
                         if pages:
                             try:
                                 pages = int(pages)
+                                logger.debug(f"Job {job_id_int}: sheets={sheets}, impressions={impressions}, using pages={pages}")
                             except (ValueError, TypeError):
                                 pages = None
+                        else:
+                            logger.warning(f"Job {job_id_int}: No page count available (sheets={sheets}, impressions={impressions})")
                         return {
                             'job_state': job_dict_value.get('job-state', 0),
                             'job_state_reasons': job_dict_value.get('job-state-reasons', []),
@@ -218,9 +266,16 @@ def get_job_status(printer_name: str, job_id: str) -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.debug(f"Error getting jobs (simple): {e}")
         
-        # Method 3: Also check completed jobs explicitly
+        # Method 3: Also check completed jobs explicitly with requested attributes
         try:
-            completed_jobs = conn.getJobs(which_jobs='completed')
+            completed_jobs = conn.getJobs(
+                which_jobs='completed',
+                requested_attributes=[
+                    'job-id', 'job-state', 'job-state-reasons', 'time-at-completion', 
+                    'job-printer-uri', 'job-name', 'job-media-sheets-completed',
+                    'job-impressions-completed', 'job-k-octets-processed'
+                ]
+            )
             logger.debug(f"Found {len(completed_jobs)} completed jobs in CUPS")
             for job_key, job_value in completed_jobs.items():
                 if isinstance(job_key, int) and job_key == job_id_int:

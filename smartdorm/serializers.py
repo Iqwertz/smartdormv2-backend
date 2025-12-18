@@ -329,7 +329,7 @@ class DeviceSerializer(serializers.ModelSerializer):
         model = Device
         fields = [
             'id', 'name', 'location', 'department', 'department_name',
-            'is_active', 'allow_new_sessions', 'price_per_page',
+            'is_active', 'allow_new_sessions', 'price_per_page_color', 'price_per_page_gray',
             'max_session_duration_minutes', 'cups_printer_name',
             'created_at', 'updated_at'
         ]
@@ -337,7 +337,8 @@ class DeviceSerializer(serializers.ModelSerializer):
 
 class DeviceSettingsUpdateSerializer(serializers.Serializer):
     """Serializer for updating device settings (price, session duration, etc.)"""
-    price_per_page = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
+    price_per_page_color = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
+    price_per_page_gray = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
     max_session_duration_minutes = serializers.IntegerField(required=False, min_value=1)
 
 class DeviceToggleSerializer(serializers.Serializer):
@@ -348,12 +349,13 @@ class PrintSessionSerializer(serializers.ModelSerializer):
     """Serializer for PrintSession model"""
     tenant_name = serializers.SerializerMethodField(read_only=True)
     device_name = serializers.CharField(source='device.name', read_only=True)
+    total_cost = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = PrintSession
         fields = [
             'id', 'external_id', 'tenant', 'tenant_name', 'device', 'device_name',
-            'started_at', 'ended_at', 'status'
+            'started_at', 'ended_at', 'status', 'total_cost'
         ]
         read_only_fields = ['id', 'external_id', 'started_at']
     
@@ -361,6 +363,13 @@ class PrintSessionSerializer(serializers.ModelSerializer):
         if obj.tenant:
             return obj.tenant.get_full_name()
         return None
+    
+    def get_total_cost(self, obj):
+        """Calculate total cost of all completed print jobs in this session"""
+        from decimal import Decimal
+        completed_jobs = obj.printjob_set.filter(status='COMPLETED')
+        total = sum(job.cost for job in completed_jobs if job.cost) or Decimal('0.00')
+        return str(total)
 
 class PrintSessionDetailSerializer(PrintSessionSerializer):
     """Extended serializer with related jobs and scans"""
@@ -378,6 +387,24 @@ class PrintSessionDetailSerializer(PrintSessionSerializer):
         scans = Scan.objects.filter(session=obj).order_by('-scanned_at')
         return ScanSerializer(scans, many=True).data
 
+class PrintJobCreateSerializer(serializers.Serializer):
+    """Serializer for creating print jobs with options"""
+    color_mode = serializers.ChoiceField(
+        choices=[('Color', 'Color'), ('Gray', 'Gray')],
+        default='Color',
+        required=False,
+        help_text="Color mode: 'Color' or 'Gray' (black & white)"
+    )
+    copies = serializers.IntegerField(
+        default=1,
+        min_value=1,
+        max_value=10,
+        required=False,
+        help_text="Number of copies to print"
+    )
+    # Note: page-ranges is complex (e.g. "1-3,5,7-9"), so we'll skip it for now
+    # User can just specify copies or we use the full document
+
 class PrintJobSerializer(serializers.ModelSerializer):
     """Serializer for PrintJob model"""
     tenant_name = serializers.SerializerMethodField(read_only=True)
@@ -386,7 +413,7 @@ class PrintJobSerializer(serializers.ModelSerializer):
         model = PrintJob
         fields = [
             'id', 'external_id', 'session', 'tenant', 'tenant_name', 'device',
-            'filename', 'pages', 'cost', 'status', 'created_at', 'completed_at',
+            'filename', 'color_mode', 'pages', 'cost', 'status', 'created_at', 'completed_at',
             'error_message', 'cups_job_id'
         ]
         read_only_fields = [
@@ -428,9 +455,23 @@ class DeviceStatusSerializer(serializers.Serializer):
     location = serializers.CharField()
     is_active = serializers.BooleanField()
     allow_new_sessions = serializers.BooleanField()
-    price_per_page = serializers.DecimalField(max_digits=5, decimal_places=2)
+    price_per_page_color = serializers.DecimalField(max_digits=5, decimal_places=2)
+    price_per_page_gray = serializers.DecimalField(max_digits=5, decimal_places=2)
     active_session = serializers.DictField(required=False, allow_null=True)
     available = serializers.BooleanField()
+
+class TenantBillingOverviewSerializer(serializers.Serializer):
+    """Serializer for tenant billing overview"""
+    tenant_id = serializers.IntegerField()
+    tenant_name = serializers.CharField()
+    surname = serializers.CharField()
+    name = serializers.CharField()
+    email = serializers.CharField()
+    current_room = serializers.CharField()
+    total_cost = serializers.CharField()
+    total_pages = serializers.IntegerField()
+    total_jobs = serializers.IntegerField()
+    total_sessions = serializers.IntegerField()
 
 class MyCostsSerializer(serializers.Serializer):
     """Serializer for user costs overview"""

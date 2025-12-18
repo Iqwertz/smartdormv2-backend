@@ -5,7 +5,7 @@ from decimal import Decimal
 import logging
 import uuid
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 def generate_external_id():
     """Generate a unique external ID (UUID hex)"""
@@ -318,7 +318,8 @@ class Device(models.Model):
     department = models.ForeignKey(Department, on_delete=models.PROTECT, help_text="Responsible department")
     is_active = models.BooleanField(default=True, help_text="Global on/off")
     allow_new_sessions = models.BooleanField(default=True, help_text="Allow new sessions")
-    price_per_page = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.10'), help_text="Price per page in Euro")
+    price_per_page_color = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.10'), help_text="Price per color page in Euro")
+    price_per_page_gray = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.05'), help_text="Price per black & white page in Euro")
     max_session_duration_minutes = models.IntegerField(default=30, help_text="Maximum session duration in minutes")
     cups_printer_name = models.CharField(max_length=255, help_text="Name of the printer in CUPS (e.g. Samsung_C1860_Series)")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -371,6 +372,7 @@ class PrintJob(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
     device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
     filename = models.CharField(max_length=255)
+    color_mode = models.CharField(max_length=10, default='Color', choices=[('Color', 'Color'), ('Gray', 'Gray')], help_text="Color mode used for this job")
     pages = models.IntegerField(null=True, blank=True, help_text="Number of printed pages (updated after printing)")
     cost = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Cost in Euro (only for COMPLETED)")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -392,7 +394,16 @@ class PrintJob(models.Model):
     def save(self, *args, **kwargs):
         # Calculate cost only for COMPLETED, otherwise 0
         if self.status == 'COMPLETED' and self.pages and self.device:
-            self.cost = Decimal(str(self.pages)) * self.device.price_per_page
+            # Use color or gray price depending on color_mode
+            if self.color_mode == 'Color':
+                price_per_page = self.device.price_per_page_color
+            else:
+                price_per_page = self.device.price_per_page_gray
+            self.cost = Decimal(str(self.pages)) * price_per_page
+            # Log the calculation for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"PrintJob.save() calculated cost: pages={self.pages}, color_mode={self.color_mode}, price_per_page={price_per_page}, cost={self.cost}")
         elif self.status != 'COMPLETED':
             self.cost = Decimal('0.00')
         super().save(*args, **kwargs)
