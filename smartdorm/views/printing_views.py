@@ -23,7 +23,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from ..models import Tenant, Device, PrintSession, PrintJob, Scan
 from ..serializers import (
     DeviceStatusSerializer, MyCostsSerializer, PrintSessionSerializer,
-    PrintSessionDetailSerializer, PrintJobSerializer, ScanSerializer
+    PrintSessionDetailSerializer, PrintJobSerializer, PrintJobCreateSerializer, ScanSerializer
 )
 from ..utils.cups_utils import submit_print_job, get_job_status, is_job_completed, is_job_failed
 from ..permissions import GroupAndEmployeeTypePermission
@@ -52,9 +52,22 @@ def device_status_view(request):
         # Get the first (and only) device
         device = Device.objects.filter(is_active=True).first()
         if not device:
+            # Return a proper response with device not found info
+            # Use 200 OK instead of 404 so the frontend can handle it gracefully
             return Response(
-                {"error": "No active device found."},
-                status=status.HTTP_404_NOT_FOUND
+                {
+                    "error": "No active device found.",
+                    "device_id": None,
+                    "device_name": None,
+                    "location": None,
+                    "is_active": False,
+                    "allow_new_sessions": False,
+                    "price_per_page_color": "0.10",
+                    "price_per_page_gray": "0.05",
+                    "active_session": None,
+                    "available": False
+                },
+                status=status.HTTP_200_OK
             )
         
         # Check for active session
@@ -87,7 +100,8 @@ def device_status_view(request):
             'location': device.location,
             'is_active': device.is_active,
             'allow_new_sessions': device.allow_new_sessions,
-            'price_per_page': device.price_per_page,
+            'price_per_page_color': str(device.price_per_page_color),
+            'price_per_page_gray': str(device.price_per_page_gray),
             'active_session': active_session_data,
             'available': device.is_active and device.allow_new_sessions and active_session is None
         })
@@ -117,18 +131,20 @@ def my_costs_view(request):
         tenant = Tenant.objects.get(username=request.user.username)
         
         # All successful jobs of the user
+        # Only sum actual stored cost values (including 0 if that's what was stored)
         all_jobs = PrintJob.objects.filter(
             tenant=tenant,
-            status=PrintJob.Status.COMPLETED
+            status=PrintJob.Status.COMPLETED,
+            cost__isnull=False  # Only include jobs with a cost value stored
         )
         
         # Jobs from this month
         month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         this_month_jobs = all_jobs.filter(created_at__gte=month_start)
         
-        # Calculate costs
-        total_cost = sum(job.cost for job in all_jobs if job.cost) or Decimal('0.00')
-        this_month_cost = sum(job.cost for job in this_month_jobs if job.cost) or Decimal('0.00')
+        # Calculate costs - sum only stored cost values (don't recalculate)
+        total_cost = sum(job.cost for job in all_jobs) or Decimal('0.00')
+        this_month_cost = sum(job.cost for job in this_month_jobs) or Decimal('0.00')
         
         # Calculate pages
         total_pages = sum(job.pages for job in all_jobs if job.pages) or 0
@@ -345,14 +361,29 @@ def session_detail_view(request, session_id):
                         job.status = PrintJob.Status.COMPLETED
                         job.completed_at = timezone.now()
                         job.error_message = None  # Remove error message on success
-                        # Update page count if available, otherwise default to 1 page
-                        if 'pages' in job_status and job_status['pages']:
+                        # Update page count if available from CUPS
+                        # Prefer CUPS value, but keep existing value if CUPS doesn't provide one
+                        if 'pages' in job_status and job_status['pages'] is not None and job_status['pages'] > 0:
+                            # CUPS provided a valid page count - use it
+                            old_pages = job.pages
                             job.pages = job_status['pages']
-                        elif job.pages is None:
-                            job.pages = 1  # Default: 1 page if not available
+                            if old_pages != job.pages:
+                                logger.info(f"Updated job {job.cups_job_id} pages from {old_pages} to {job.pages} (from CUPS)")
+                            else:
+                                logger.debug(f"Job {job.cups_job_id} pages unchanged: {job.pages} (from CUPS)")
+                        elif job.pages is None or job.pages == 0:
+                            # No valid page count from CUPS and no existing value - default to 1
+                            job.pages = 1
+                            logger.warning(f"Job {job.cups_job_id} has no page count from CUPS (CUPS returned: {job_status.get('pages')}), defaulting to 1")
+                        else:
+                            # Keep existing page count if CUPS doesn't provide one
+                            logger.debug(f"Job {job.cups_job_id} keeping existing page count: {job.pages} (CUPS returned: {job_status.get('pages')})")
+                        
                         # Cost is automatically calculated in job.save() (via Model.save() method)
+                        # Log BEFORE save to see what will be calculated
+                        logger.info(f"Job {job.cups_job_id} before save: pages={job.pages}, color_mode={job.color_mode}, device_price_color={job.device.price_per_page_color if job.device else 'N/A'}, device_price_gray={job.device.price_per_page_gray if job.device else 'N/A'}")
                         job.save()
-                        logger.info(f"Job {job.cups_job_id} marked as COMPLETED with {job.pages} pages, cost: {job.cost}")
+                        logger.info(f"Job {job.cups_job_id} marked as COMPLETED: pages={job.pages}, color_mode={job.color_mode}, cost={job.cost}")
                     elif is_job_failed(job_status['job_state'], job_status.get('job_state_reasons', [])):
                         job.status = PrintJob.Status.FAILED
                         # Ensure job_state_reasons is treated as a list
@@ -501,24 +532,85 @@ def print_job_view(request, session_id):
         file = request.FILES['file']
         filename = file.name
         
+        # Parse print options from request
+        options_serializer = PrintJobCreateSerializer(data=request.data)
+        if not options_serializer.is_valid():
+            return Response(
+                options_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        options_data = options_serializer.validated_data
+        color_mode = options_data.get('color_mode', 'Color')
+        copies = options_data.get('copies', 1)
+        
+        # Log the received options for debugging
+        logger.info(f"Creating print job: filename={filename}, color_mode={color_mode}, copies={copies}")
+        
         # Create PrintJob
         print_job = PrintJob.objects.create(
             session=session,
             tenant=tenant,
             device=session.device,
             filename=filename,
+            color_mode=color_mode,
             status=PrintJob.Status.PENDING
         )
         
+        logger.info(f"Created PrintJob {print_job.external_id}: color_mode={print_job.color_mode}, device={print_job.device.name if print_job.device else 'None'}")
+        
         # Read file content
         file_data = file.read()
+        
+        # Extract PDF page count as fallback if CUPS doesn't provide it
+        # This helps ensure correct page count especially when CUPS reports incorrectly
+        pdf_pages = None
+        try:
+            from io import BytesIO
+            from pypdf import PdfReader
+            pdf_reader = PdfReader(BytesIO(file_data))
+            pdf_pages = len(pdf_reader.pages)
+            logger.info(f"PDF {filename} has {pdf_pages} pages, copies={copies}, total pages={pdf_pages * copies}")
+            # Store the estimated page count (PDF pages * copies) as initial value
+            # This will be updated by CUPS when the job completes, but serves as fallback
+            print_job.pages = pdf_pages * copies
+            print_job.save()
+            logger.info(f"Set initial pages for job {print_job.external_id}: {print_job.pages} (PDF pages * copies)")
+        except Exception as e:
+            logger.warning(f"Could not extract PDF page count: {e}")
+            # If PDF parsing fails, we'll rely on CUPS
+        
+        # Prepare CUPS options
+        # Try both IPP standard (print-color-mode) and PPD-specific (ColorModel) options
+        # Some drivers ignore print-color-mode but accept ColorModel
+        cups_options = {
+            'copies': str(copies),
+        }
+        
+        # Add color mode - try both option names for maximum compatibility
+        if color_mode == 'Color':
+            # IPP standard option (works with modern drivers)
+            cups_options['print-color-mode'] = 'color'
+            # PPD-specific option (works with older drivers that have ColorModel in PPD)
+            # Try both CMYK and Color - different PPDs use different values
+            # Based on PPD definition "*ColorModel CMYK/Color:" the value can be either "CMYK" or "Color"
+            cups_options['ColorModel'] = 'CMYK'  # Primary value from PPD
+            # Also try Color as alternative (some PPDs use this)
+            # cups_options['ColorModel'] = 'Color'  # Alternative if CMYK doesn't work
+        else:
+            # Black & white
+            cups_options['print-color-mode'] = 'monochrome'
+            cups_options['ColorModel'] = 'Gray'
+        
+        logger.info(f"Prepared CUPS options for color_mode={color_mode}, copies={copies}: {cups_options}")
         
         # Send to CUPS
         cups_job_id = submit_print_job(
             printer_name=session.device.cups_printer_name,
             file_data=file_data,
             filename=filename,
-            title=f"SmartDorm Print {print_job.external_id[:8]}"
+            title=f"SmartDorm Print {print_job.external_id[:8]}",
+            options=cups_options
         )
         
         if cups_job_id:
@@ -583,14 +675,29 @@ def session_jobs_view(request, session_id):
                         job.status = PrintJob.Status.COMPLETED
                         job.completed_at = timezone.now()
                         job.error_message = None  # Remove error message on success
-                        # Update page count if available, otherwise default to 1 page
-                        if 'pages' in job_status and job_status['pages']:
+                        # Update page count if available from CUPS
+                        # Prefer CUPS value, but keep existing value if CUPS doesn't provide one
+                        if 'pages' in job_status and job_status['pages'] is not None and job_status['pages'] > 0:
+                            # CUPS provided a valid page count - use it
+                            old_pages = job.pages
                             job.pages = job_status['pages']
-                        elif job.pages is None:
-                            job.pages = 1  # Default: 1 page if not available
+                            if old_pages != job.pages:
+                                logger.info(f"Updated job {job.cups_job_id} pages from {old_pages} to {job.pages} (from CUPS)")
+                            else:
+                                logger.debug(f"Job {job.cups_job_id} pages unchanged: {job.pages} (from CUPS)")
+                        elif job.pages is None or job.pages == 0:
+                            # No valid page count from CUPS and no existing value - default to 1
+                            job.pages = 1
+                            logger.warning(f"Job {job.cups_job_id} has no page count from CUPS (CUPS returned: {job_status.get('pages')}), defaulting to 1")
+                        else:
+                            # Keep existing page count if CUPS doesn't provide one
+                            logger.debug(f"Job {job.cups_job_id} keeping existing page count: {job.pages} (CUPS returned: {job_status.get('pages')})")
+                        
                         # Cost is automatically calculated in job.save() (via Model.save() method)
+                        # Log BEFORE save to see what will be calculated
+                        logger.info(f"Job {job.cups_job_id} before save: pages={job.pages}, color_mode={job.color_mode}, device_price_color={job.device.price_per_page_color if job.device else 'N/A'}, device_price_gray={job.device.price_per_page_gray if job.device else 'N/A'}")
                         job.save()
-                        logger.info(f"Job {job.cups_job_id} marked as COMPLETED with {job.pages} pages, cost: {job.cost}")
+                        logger.info(f"Job {job.cups_job_id} marked as COMPLETED: pages={job.pages}, color_mode={job.color_mode}, cost={job.cost}")
                     elif is_job_failed(job_status['job_state'], job_status.get('job_state_reasons', [])):
                         job.status = PrintJob.Status.FAILED
                         # Ensure job_state_reasons is treated as a list
@@ -1006,16 +1113,17 @@ def device_overview_view(request, device_id):
         total_jobs = PrintJob.objects.filter(device=device).count()
         completed_jobs = PrintJob.objects.filter(
             device=device,
-            status=PrintJob.Status.COMPLETED
+            status=PrintJob.Status.COMPLETED,
+            cost__isnull=False  # Only sum stored cost values
         )
         total_pages = sum(job.pages for job in completed_jobs if job.pages) or 0
-        total_revenue = sum(job.cost for job in completed_jobs if job.cost) or Decimal('0.00')
+        total_revenue = sum(job.cost for job in completed_jobs) or Decimal('0.00')
         
         # This month
         month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         this_month_jobs = completed_jobs.filter(created_at__gte=month_start)
         this_month_pages = sum(job.pages for job in this_month_jobs if job.pages) or 0
-        this_month_revenue = sum(job.cost for job in this_month_jobs if job.cost) or Decimal('0.00')
+        this_month_revenue = sum(job.cost for job in this_month_jobs) or Decimal('0.00')
         
         active_session_data = None
         if active_session:
@@ -1085,9 +1193,9 @@ def device_statistics_view(request, device_id):
             jobs_query = jobs_query.filter(created_at__lte=end_date)
             sessions_query = sessions_query.filter(started_at__lte=end_date)
         
-        completed_jobs = jobs_query.filter(status=PrintJob.Status.COMPLETED)
+        completed_jobs = jobs_query.filter(status=PrintJob.Status.COMPLETED, cost__isnull=False)
         total_pages = sum(job.pages for job in completed_jobs if job.pages) or 0
-        total_revenue = sum(job.cost for job in completed_jobs if job.cost) or Decimal('0.00')
+        total_revenue = sum(job.cost for job in completed_jobs) or Decimal('0.00')
         
         return Response({
             'device_id': device.id,
@@ -1148,8 +1256,10 @@ def device_settings_update_view(request, device_id):
         validated_data = serializer.validated_data
         
         # Update device
-        if 'price_per_page' in validated_data:
-            device.price_per_page = validated_data['price_per_page']
+        if 'price_per_page_color' in validated_data:
+            device.price_per_page_color = validated_data['price_per_page_color']
+        if 'price_per_page_gray' in validated_data:
+            device.price_per_page_gray = validated_data['price_per_page_gray']
         if 'max_session_duration_minutes' in validated_data:
             device.max_session_duration_minutes = validated_data['max_session_duration_minutes']
         
@@ -1324,6 +1434,85 @@ def device_history_view(request, device_id):
         logger.error(f"Error in device_history_view: {e}", exc_info=True)
         return Response(
             {"error": "An error occurred while retrieving history."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def tenant_billing_overview_view(request):
+    """
+    GET /api/printing/tenant-billing-overview/
+    
+    Returns billing overview for all tenants who have print costs.
+    Only tenants with costs > 0 are included.
+    """
+    tenant_billing_overview_view.required_employee_types = ['DEPARTMENT']
+    
+    try:
+        from django.db.models import Count
+        
+        # Get all unique tenants who have completed print jobs with stored cost values
+        # Aggregate all jobs per tenant (one row per tenant, not per job)
+        tenant_ids_with_jobs = PrintJob.objects.filter(
+            status=PrintJob.Status.COMPLETED,
+            cost__isnull=False
+        ).values_list('tenant_id', flat=True).distinct()
+        
+        # Build billing data by aggregating all jobs per tenant
+        billing_data = []
+        processed_tenant_ids = set()  # Track processed tenants to avoid duplicates
+        
+        for tenant_id in tenant_ids_with_jobs:
+            # Skip if already processed (safety check)
+            if tenant_id in processed_tenant_ids:
+                continue
+            processed_tenant_ids.add(tenant_id)
+            
+            tenant = Tenant.objects.get(id=tenant_id)
+            
+            # Get ALL jobs for this tenant (aggregate all jobs into one entry)
+            tenant_jobs = PrintJob.objects.filter(
+                tenant=tenant,
+                status=PrintJob.Status.COMPLETED,
+                cost__isnull=False
+            )
+            
+            # Calculate totals by summing ALL jobs for this tenant
+            total_cost = sum(job.cost for job in tenant_jobs) or Decimal('0.00')
+            total_pages = sum(job.pages for job in tenant_jobs if job.pages) or 0
+            total_jobs = tenant_jobs.count()
+            
+            # Count sessions
+            total_sessions = PrintSession.objects.filter(tenant=tenant).count()
+            
+            # Only include tenants with total_cost > 0
+            if total_cost > Decimal('0.00'):
+                billing_data.append({
+                    'tenant_id': tenant.id,
+                    'tenant_name': tenant.get_full_name(),
+                    'surname': tenant.surname,
+                    'name': tenant.name,
+                    'email': tenant.email or '',
+                    'current_room': tenant.current_room or '',
+                    'total_cost': str(total_cost),
+                    'total_pages': total_pages,
+                    'total_jobs': total_jobs,
+                    'total_sessions': total_sessions,
+                })
+        
+        # Sort by surname, name
+        billing_data.sort(key=lambda x: (x['surname'], x['name']))
+        
+        from ..serializers import TenantBillingOverviewSerializer
+        serializer = TenantBillingOverviewSerializer(billing_data, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error in tenant_billing_overview_view: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while retrieving billing overview."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

@@ -195,6 +195,7 @@ printing_urlpatterns = [
     path('active-session/', printing_views.active_session_view, name='printing-active-session'),
     path('scans/', printing_views.upload_scan_view, name='printing-upload-scan'),
     # Department management endpoints
+    path('tenant-billing-overview/', printing_views.tenant_billing_overview_view, name='printing-tenant-billing-overview'),
     path('device/<int:device_id>/overview/', printing_views.device_overview_view, name='printing-device-overview'),
     path('device/<int:device_id>/statistics/', printing_views.device_statistics_view, name='printing-device-statistics'),
     path('device/<int:device_id>/settings/', printing_views.device_settings_update_view, name='printing-device-settings'),
