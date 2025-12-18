@@ -16,10 +16,10 @@ from dateutil.relativedelta import relativedelta
 import re
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank
-from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
+from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
+from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
-from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
+from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
 
 import logging
@@ -231,68 +231,6 @@ def move_tenant_view(request, tenant_id):
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 @transaction.atomic
-def terminate_tenant_view(request, tenant_id):
-    """
-    Terminates a tenant's contract effective from a specified move_out_date.
-    This updates the tenant's move_out date and initiates the departure process
-    by creating a 'CONFIRMED' departure and triggering signature creation.
-    """
-    terminate_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    terminate_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
-    serializer = TenantTerminationSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-    data = serializer.validated_data
-    move_out_date = data['move_out_date']
-    
-    tenant = get_object_or_404(Tenant, id=tenant_id)
-    
-    # Check if a departure process is already active. If so delete it.
-    if Departure.objects.filter(tenant=tenant).exists():
-        Departure.objects.filter(tenant=tenant).delete()
-        logger.info(f"Existing departure for tenant {tenant.username} deleted before creating a new one.")
-        
-        
-    # 1. Update tenant's move_out date
-    tenant.move_out = move_out_date
-    tenant.save()
-    logger.info(f"Tenant {tenant.username}'s move_out date updated to {move_out_date} for termination.")
-
-    # 2. Create a confirmed departure record
-    departure = Departure.objects.create(
-        tenant=tenant,
-        external_id=uuid.uuid4().hex,
-        created_on=timezone.now().date(),
-        status=Departure.Status.CONFIRMED
-    )
-    logger.info(f"Created CONFIRMED departure for tenant {tenant.username}.")
-    
-    # 3. Initiate the signature process
-    create_and_notify_departure_signatures(departure)
-    
-    # 4. Notify the tenant
-    email_utils.send_email_message(
-        recipient_list=[tenant.email],
-        subject="Dein Wohnvertrag im Schollheim wurde gekündigt",
-        html_template_name='email/tenant-departure-termination.html',
-        context={
-            'greeting': tenant.name,
-            'departureDate': tenant.move_out.strftime('%d.%m.%Y')
-        }
-    )
-    
-    return Response(
-        {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
-        status=status.HTTP_200_OK
-    )
-
-
-@api_view(['POST'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
-@transaction.atomic
 def create_new_tenant_view(request):
     """
     Handles the creation of a new tenant, including LDAP account and email notification.
@@ -471,7 +409,7 @@ def create_subtenant_view(request):
         )
         
         # Update the main tenant's sublet count and adjust dates
-        update_tenant_data_from_subtenant_change(subtenant)
+        recalculate_tenant_contract_dates(subtenant.tenant)
             
     except Exception as e:
         logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
@@ -553,30 +491,11 @@ def update_subtenant_view(request, subtenant_id):
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
-        # Update the main tenant's sublet count and adjust dates if relevant fields changed
-        update_tenant_data_from_subtenant_change(subtenant)
+        
+        recalculate_tenant_contract_dates(subtenant.tenant)
+        
         return Response(SubtenantSerializer(subtenant).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-def update_tenant_data_from_subtenant_change(subtenant):
-    """
-    Updates the main tenant's sublet count and adjusts move_out and probation_end dates
-    based on the current subtenants with university confirmation.
-    """
-    main_tenant = get_object_or_404(Tenant, id=subtenant.tenant_id)
-    
-    # Calculate the sublets and the sublet duration from all sublets of the tenant that have a university confirmation
-    sublets = Subtenant.objects.filter(tenant_id=main_tenant.id, university_confirmation=True)
-    main_tenant.sublet = sublets.count()
-    sublet_duration = sum((s.move_out - s.move_in).days for s in sublets)
-    
-    # Update move_out and probation_end dates
-    main_tenant.move_out += timedelta(days=sublet_duration)
-    if main_tenant.probation_end > subtenant.move_in:
-        main_tenant.probation_end += timedelta(days=sublet_duration)
-    
-    main_tenant.save()
-    logger.info(f"Updated main tenant '{main_tenant.username}' sublet count to {main_tenant.sublet} and adjusted move_out to {main_tenant.move_out} due to subtenant change.")
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
@@ -597,6 +516,7 @@ def delete_subtenant_view(request, subtenant_id):
     try:
         ldap_utils.delete_ldap_user(username_to_delete)
         subtenant.delete()
+        recalculate_tenant_contract_dates(tenant)
         logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
         return Response(status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
@@ -1067,17 +987,18 @@ def process_claim_decision_view(request, claim_id):
         claim.save()
         
         tenant.extension = (tenant.extension or 0) + 1
+        tenant.save()
         
         new_move_out_date_str = request.data.get('move_out_date')
         if new_move_out_date_str:
             try:
                 tenant.move_out = date.fromisoformat(new_move_out_date_str)
+                tenant.save()
             except (ValueError, TypeError):
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            tenant.move_out += timedelta(days=app_config.DEFAULT_EXTENSION_DURATION_DAYS)
-        
-        tenant.save()
+            recalculate_tenant_contract_dates(tenant)
+
         Departure.objects.filter(tenant=tenant).delete()
         
         #Send email to tenant
@@ -1094,3 +1015,176 @@ def process_claim_decision_view(request, claim_id):
         return Response({"message": "Claim approved, tenant extended, and departure deleted."}, status=status.HTTP_200_OK)
 
     return Response({"error": "Invalid decision. Must be 'APPROVED' or 'REJECTED'."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+# --- TERMINATION MANAGEMENT ---
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def terminate_tenant_view(request, tenant_id):
+    """
+    Terminates a tenant's contract effective from a specified move_out_date.
+    Creates a Termination record and updates the tenant's move_out date via recalculation.
+    """
+    terminate_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    terminate_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    serializer = TenantTerminationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    data = serializer.validated_data
+    move_out_date = data['move_out_date']
+    note = request.data.get('note', 'Manually terminated via API')
+    
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # 1. Create or Update Termination Record
+    Termination.objects.update_or_create(
+        tenant=tenant,
+        defaults={
+            'date': move_out_date,
+            'note': note
+        }
+    )
+    logger.info(f"Termination record created/updated for tenant {tenant.username} at {move_out_date}.")
+
+    # 2. Recalculate dates (This will apply the termination date to the tenant model)
+    recalculate_tenant_contract_dates(tenant)
+
+    # 3. Handle Departure Logic
+    # Check if a departure process is already active. If so delete it to reset state.
+    if Departure.objects.filter(tenant=tenant).exists():
+        Departure.objects.filter(tenant=tenant).delete()
+        logger.info(f"Existing departure for tenant {tenant.username} deleted before creating a new one.")
+
+    # Create a confirmed departure record
+    departure = Departure.objects.create(
+        tenant=tenant,
+        external_id=uuid.uuid4().hex,
+        created_on=timezone.now().date(),
+        status=Departure.Status.CONFIRMED
+    )
+    
+    # Initiate the signature process
+    create_and_notify_departure_signatures(departure)
+    
+    # Notify the tenant
+    email_utils.send_email_message(
+        recipient_list=[tenant.email],
+        subject="Dein Wohnvertrag im Schollheim wurde gekündigt",
+        html_template_name='email/tenant-departure-termination.html',
+        context={
+            'greeting': tenant.name,
+            'departureDate': tenant.move_out.strftime('%d.%m.%Y')
+        }
+    )
+    
+    return Response(
+        {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
+        status=status.HTTP_200_OK
+    )
+
+@api_view(['GET', 'DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def manage_termination_view(request, tenant_id):
+    """
+    GET: Retrieve termination info for a tenant.
+    DELETE: Remove a termination (revoking the firing), triggers recalculation.
+    """
+    manage_termination_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    manage_termination_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+
+    if request.method == 'GET':
+        try:
+            termination = tenant.termination_record
+            return Response(TerminationSerializer(termination).data)
+        except Termination.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND) # No termination exists
+
+    if request.method == 'DELETE':
+        try:
+            termination = tenant.termination_record
+            termination.delete()
+            # Important: Recalculate dates to restore original contract length
+            changes = recalculate_tenant_contract_dates(tenant)
+            logger.info(f"Termination revoked for {tenant.username}. Changes: {changes}")
+            return Response({"message": "Termination revoked. Contract dates recalculated."}, status=status.HTTP_204_NO_CONTENT)
+        except Termination.DoesNotExist:
+            return Response({"error": "No termination found to delete."}, status=status.HTTP_404_NOT_FOUND)
+
+
+# --- DEPARTMENT EXTENSION MANAGEMENT ---
+
+@api_view(['GET', 'POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def manage_department_extensions_view(request, tenant_id=None):
+    """
+    GET: List all extensions for a specific tenant (requires tenant_id in URL).
+    POST: Create a new extension.
+    """
+    manage_department_extensions_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    manage_department_extensions_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    if request.method == 'GET':
+        if not tenant_id:
+            return Response({"error": "Tenant ID required for listing."}, status=status.HTTP_400_BAD_REQUEST)
+        extensions = DepartmentExtension.objects.filter(tenant_id=tenant_id).order_by('-created_at')
+        return Response(DepartmentExtensionSerializer(extensions, many=True).data)
+
+    if request.method == 'POST':
+        serializer = DepartmentExtensionCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        t_id = serializer.validated_data['tenant_id']
+        tenant = get_object_or_404(Tenant, id=t_id)
+        
+        DepartmentExtension.objects.create(
+            tenant=tenant,
+            months=serializer.validated_data['months'],
+            note=serializer.validated_data.get('note')
+        )
+        
+        # Recalculate contract dates
+        changes = recalculate_tenant_contract_dates(tenant)
+        logger.info(f"Department extension added for {tenant.username}. Changes: {changes}")
+        
+        return Response({"message": "Extension added and contract recalculated."}, status=status.HTTP_201_CREATED)
+
+@api_view(['DELETE', 'PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def update_department_extension_view(request, extension_id):
+    """
+    DELETE: Remove a specific extension.
+    PUT: Update months/note.
+    """
+    update_department_extension_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    update_department_extension_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    extension = get_object_or_404(DepartmentExtension, id=extension_id)
+    tenant = extension.tenant
+
+    if request.method == 'DELETE':
+        extension.delete()
+        changes = recalculate_tenant_contract_dates(tenant)
+        return Response({"message": "Extension deleted and contract recalculated."}, status=status.HTTP_204_NO_CONTENT)
+    
+    if request.method == 'PUT':
+        # Simple update of note or months
+        extension.months = request.data.get('months', extension.months)
+        extension.note = request.data.get('note', extension.note)
+        extension.save()
+        changes = recalculate_tenant_contract_dates(tenant)
+        return Response(DepartmentExtensionSerializer(extension).data)

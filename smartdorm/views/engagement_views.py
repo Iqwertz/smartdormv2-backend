@@ -644,6 +644,14 @@ def create_engagement_admin_view(request):
             logger.info(f"Added user '{tenant.username}' to LDAP group '{group_cn}' for engagement '{department.name}'.")
         else:
             logger.error(f"Failed to add user '{tenant.username}' to LDAP group '{group_cn}' for engagement '{department.name}'.")
+        # Also add tenant to 'HSV' group
+        hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+        success_hsv = ldap_utils.add_user_to_group(tenant.username, hsv_group_dn)
+        if success_hsv:
+            logger.info(f"Added user '{tenant.username}' to LDAP group 'HSV' for engagement '{department.name}'.")
+        else:
+            logger.error(f"Failed to add user '{tenant.username}' to LDAP group 'HSV' for engagement '{department.name}'.")
+            
     response_serializer = AdminEngagementListSerializer(engagement)
     return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -696,7 +704,13 @@ def delete_engagement_view(request, engagement_id):
             logger.info(f"Removed user '{tenant.username}' from LDAP group '{group_cn}' for deleted engagement '{engagement.department.name}'.")
         else:
             logger.error(f"Failed to remove user '{tenant.username}' from LDAP group '{group_cn}' for deleted engagement '{engagement.department.name}'.")
-    
+        # Also remove from 'HSV' group
+        hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+        success_hsv = ldap_utils.remove_user_from_group(tenant.username, hsv_group_dn)
+        
+        if not success_hsv:
+            logger.error(f"Failed to remove user '{tenant.username}' from LDAP group 'HSV' for deleted engagement '{engagement.department.name}'.")
+
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['PUT'])
@@ -905,6 +919,11 @@ def update_semester_and_ldap_view(request):
             success = ldap_utils.remove_user_from_group(eng.tenant.username, group_dn)
             if not success:
                 ldap_errors.append(f"Failed to remove {eng.tenant.username} from {group_dn}")
+            # Remove tenant from 'HSV' group as well
+            hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+            success_hsv = ldap_utils.remove_user_from_group(eng.tenant.username, hsv_group_dn)
+            if not success_hsv:
+                ldap_errors.append(f"Failed to remove {eng.tenant.username} from {hsv_group_dn}")
 
     # Add tenants to new semester's engagement groups
     new_engagements = Engagement.objects.filter(semester=new_semester).select_related('tenant', 'department')
@@ -916,6 +935,12 @@ def update_semester_and_ldap_view(request):
             success = ldap_utils.add_user_to_group(eng.tenant.username, group_dn)
             if not success:
                 ldap_errors.append(f"Failed to add {eng.tenant.username} to {group_dn}")
+            # Also add tenant to 'HSV' group
+            hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+            success_hsv = ldap_utils.add_user_to_group(eng.tenant.username, hsv_group_dn)
+            if not success_hsv:
+                ldap_errors.append(f"Failed to add {eng.tenant.username} to {hsv_group_dn}")
+            
 
     if ldap_errors:
         # The transaction will be rolled back automatically on exception.

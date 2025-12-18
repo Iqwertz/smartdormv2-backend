@@ -18,7 +18,7 @@ import logging
 import uuid
 from smartdorm.serializers import TenantSerializer, EngagementSerializer, HsvTenantSerializer
 from ..models import Engagement
-from ..utils import email_utils, pdf_utils
+from ..utils import email_utils, pdf_utils, helper
 from .. import config as app_config
 from django.db.models import Prefetch, Max
 from django.utils import timezone  
@@ -532,3 +532,22 @@ def delete_engagement_application_view(request, app_id):
         return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
     except EngagementApplication.DoesNotExist:
         return Response({"error": "Application not found or you do not have permission to delete it."}, status=status.HTTP_404_NOT_FOUND)
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@authentication_classes([SessionAuthentication])
+def my_contract_calculation_view(request):
+    """
+    Returns a detailed breakdown of how the tenant's move_out date was calculated.
+    """
+    my_contract_calculation_view.required_employee_types = ['TENANT']
+    
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+        data = helper.get_contract_date_breakdown(tenant)
+        return Response(data, status=status.HTTP_200_OK)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error calculating contract details for {request.user.username}: {e}", exc_info=True)
+        return Response({"error": "An internal error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

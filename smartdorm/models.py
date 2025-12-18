@@ -245,6 +245,36 @@ class OfflineUserPermissions(models.Model):
         db_table = 'offline_user_permissions'
         managed = False
         
+class Termination(models.Model):
+    """
+    Represents a hard termination of a contract.
+    If this exists for a tenant, it overrides all other calculation logic.
+    """
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE, db_column='tenant_id', related_name='termination_record')
+    date = models.DateField()
+    note = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_termination'
+        managed = True 
+
+class DepartmentExtension(models.Model):
+    """
+    Represents ad-hoc extensions (or reductions) granted by the department.
+    Months can be negative to reduce the contract duration.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id', related_name='department_extensions')
+    months = models.IntegerField(help_text="Number of months to extend (positive) or reduce (negative)")
+    note = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_department_extension'
+        managed = True 
+        
 class GlobalAppSettings(models.Model):
     # Singleton model: there should only be one instance of this model.
     id = models.PositiveIntegerField(primary_key=True, default=1, editable=False)
