@@ -1083,6 +1083,10 @@ def terminate_tenant_view(request, tenant_id):
         }
     )
     
+    #Check if tenant has claims and set them to rejected
+    claims_updated = Claim.objects.filter(tenant=tenant, status__in=[Claim.Status.CREATED, Claim.Status.PROCESSING]).update(status=Claim.Status.REJECTED)
+    logger.info(f"Claims updated to REJECTED for tenant {tenant.username}: {claims_updated}")
+    
     return Response(
         {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
         status=status.HTTP_200_OK
@@ -1114,6 +1118,10 @@ def manage_termination_view(request, tenant_id):
             termination = tenant.termination_record
             termination.delete()
             # Important: Recalculate dates to restore original contract length
+            # Check if the tenant already has a departure record, if so we need to delete it since the tenant is not fired anymore (we also need to delete the signature ascociated with the departure)
+            if Departure.objects.filter(tenant=tenant).exists():
+                Departure.objects.filter(tenant=tenant).delete()
+                logger.info(f"Departure record deleted for tenant {tenant.username} due to termination revocation.")
             changes = recalculate_tenant_contract_dates(tenant)
             logger.info(f"Termination revoked for {tenant.username}. Changes: {changes}")
             return Response({"message": "Termination revoked. Contract dates recalculated."}, status=status.HTTP_204_NO_CONTENT)
