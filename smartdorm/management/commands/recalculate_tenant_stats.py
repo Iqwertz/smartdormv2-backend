@@ -115,6 +115,7 @@ class Command(BaseCommand):
 
     def sync_ldap_roles(self, tenants, current_semester):
         """Synchronizes LDAP groups based on tenant status and engagements."""
+        print("Starting LDAP role synchronization...")
         
         # --- LDAP Connection Setup ---
         ldap_uri = settings.AUTH_LDAP_SERVER_URI
@@ -216,7 +217,8 @@ class Command(BaseCommand):
 
         finally:
             con.unbind_s()
-
+            print("LDAP connection closed.")
+            
     def _get_base_dept_name(self, full_name):
         name = full_name.split(' ')[0]
         name = name.replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
