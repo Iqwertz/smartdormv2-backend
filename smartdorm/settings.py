@@ -92,8 +92,8 @@ NEXTCLOUD_CALENDAR_URL = os.environ.get("NEXTCLOUD_CALENDAR_URL", "https://cloud
 CUPS_SERVER = os.environ.get("CUPS_SERVER", None)  # IP or hostname of Raspberry Pi (e.g., "192.168.1.100")
 CUPS_PRINTER_NAME = os.environ.get("CUPS_PRINTER_NAME", None)  # CUPS printer name (e.g., "Samsung_C1860_Series")
 
-# Pi HTTP service for scans
-PI_SCAN_SERVICE_URL = os.environ.get("PI_SCAN_SERVICE_URL", "http://localhost:8000")
+# Pi HTTP service for scans (set in .env, e.g. http://192.168.0.124:5000)
+PI_SCAN_SERVICE_URL = os.environ.get("PI_SCAN_SERVICE_URL", "http://localhost:5000")
 PI_SCAN_SERVICE_TIMEOUT = int(os.environ.get("PI_SCAN_SERVICE_TIMEOUT", "300"))  # 5 minutes for scan
 
 # --- Email Configuration ---

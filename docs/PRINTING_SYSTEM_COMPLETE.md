@@ -129,12 +129,10 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install requests flask
 
-# Copy scan service script
-# (From backend: scripts/pi_scan_service.py)
-# Or create directly (see scripts/pi_scan_service.py)
+# Copy scan service from Pi repo (smartdorm-print-server): scan_service.py
+# See Pi repo for the file and install instructions.
 
-# Make executable
-chmod +x pi_scan_service.py
+chmod +x scan_service.py
 
 # Create systemd service
 sudo nano /etc/systemd/system/smartdorm-scan-service.service
@@ -153,7 +151,7 @@ WorkingDirectory=/srv/smartdorm
 Environment="PATH=/srv/smartdorm/venv/bin"
 Environment="SMARTDORM_API_BASE=http://192.168.0.106:8000/api"
 Environment="SCAN_DEVICE=xerox_mfp:libusb:001:005"
-ExecStart=/srv/smartdorm/venv/bin/python /srv/smartdorm/pi_scan_service.py
+ExecStart=/srv/smartdorm/venv/bin/python /srv/smartdorm/scan_service.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -179,9 +177,8 @@ sudo systemctl start smartdorm-scan-service
 # CUPS configuration
 CUPS_SERVER=192.168.0.124  # IP address of Raspberry Pi
 CUPS_PRINTER_NAME=Samsung_C1860_Series  # Name from lpstat -p
-
-# Pi Scan Service
-PI_SCAN_SERVICE_URL=http://192.168.0.124:5000  # Scan service URL
+# Pi Scan Service (for scan uploads)
+PI_SCAN_SERVICE_URL=http://192.168.0.124:5000
 ```
 
 #### 2.2 Install Dependencies
@@ -192,9 +189,9 @@ source venv/bin/activate
 pip install pycups pypdf
 ```
 
-**Important:** `pycups` requires CUPS development libraries:
+**Important:** `pycups` requires CUPS development libraries on WSL2/Server:
 ```bash
-sudo apt-get install -y libcups2-dev  # On WSL2/Server
+sudo apt-get install -y libcups2-dev
 ```
 
 #### 2.3 Database Migration
@@ -206,7 +203,7 @@ python manage.py migrate
 #### 2.4 Create Device
 
 ```bash
-python scripts/setup_device.py
+python scripts_printing_system/setup_device.py
 ```
 
 Or manually in Django Admin/Shell:
@@ -221,21 +218,13 @@ Or manually in Django Admin/Shell:
 
 No special configuration needed - frontend uses the backend API.
 
----
-
 ## Daily Startup
 
 After a restart, all components must be started:
 
 ### 1. Windows: Port Forwarding (PowerShell as Administrator)
 
-**Using script:**
-```powershell
-cd C:\Users\Antonio\Tambaro\dev\schollheim\smartdormv2\smartdormv2-backend\scripts
-.\wsl_port_forward.ps1
-```
-
-**Or manually:**
+**Manually (or run a port-forward script if you have one):**
 ```powershell
 $WSL_IP = (wsl hostname -I).Trim()
 netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
@@ -247,26 +236,103 @@ netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 conne
 ### 2. WSL2: Django Backend
 
 ```bash
-cd /home/tambaro/dev/schollheim/smartdormv2/smartdormv2-backend
+cd smartdormv2-backend   # or your backend project path
 ./run-server.sh
 # Or: source venv/bin/activate && python manage.py runserver 0.0.0.0:8000
 ```
 
 ### 3. Raspberry Pi: Services
 
-```bash
-ssh pi@192.168.0.124
+On the Pi, ensure CUPS and the scan service are running (they start automatically if you ran `systemctl enable` during setup):
 
-# Start services (if not automatic)
+```bash
+ssh pi@<pi-ip>
+
+# Start services if not automatic
 sudo systemctl start cups smartdorm-scan-service
 
 # Check status
 sudo systemctl status cups smartdorm-scan-service
 ```
 
-**Note:** Services start automatically on boot (after `enable`).
+---
+
+## API Endpoints (Reference)
+
+### Tenant Endpoints
+
+- `GET /api/tenants/printing/device-status/` - Device status
+- `GET /api/tenants/printing/my-costs/` - My costs
+- `GET /api/tenants/printing/my-sessions/` - My sessions
+- `GET /api/tenants/printing/my-scans/` - My scans
+- `POST /api/tenants/printing/sessions/start/` - Start session
+- `POST /api/tenants/printing/sessions/{id}/end/` - End session
+- `POST /api/tenants/printing/sessions/{id}/print/` - Create print job
+  - Requires: `multipart/form-data` with `file`, `color_mode`, `copies`
+- `POST /api/tenants/printing/sessions/{id}/scan/start/` - Start scan
+- `GET /api/tenants/printing/sessions/{id}/` - Session details (with jobs and scans)
+- `GET /api/tenants/printing/scans/{id}/download/` - Download scan
+
+### Admin Endpoints
+
+- `GET /api/printing/device/{id}/overview/` - Device overview (status, active session, statistics)
+- `GET /api/printing/device/{id}/statistics/` - Detailed statistics
+- `PUT /api/printing/device/{id}/settings/` - Update settings (prices, max session duration)
+- `POST /api/printing/device/{id}/toggle-active/` - Toggle device active/inactive
+- `POST /api/printing/device/{id}/terminate-session/` - Terminate active session
+- `GET /api/printing/device/{id}/history/` - Device history (sessions, jobs)
+- `GET /api/printing/tenant-billing-overview/` - Billing overview (all tenants with costs)
+
+### Pi Endpoints (No Authentication Required)
+
+- `GET /api/printing/active-session/` - Query active session
+- `POST /api/printing/scans/` - Upload scan (from Pi scan service)
 
 ---
+
+## Files and Scripts
+
+### Backend (this repo)
+
+- `scripts_printing_system/setup_device.py` - Create print device in database (run once per environment)
+- Port forwarding: use the manual `netsh` commands in "Daily Startup" (or your own script if you have one)
+
+### Pi (separate repo: smartdorm-print-server)
+
+The Pi runs only the scan service. The Pi repo contains:
+- `scan_service.py` - HTTP service that receives scan requests and uploads PDFs to the backend (deployed to `/srv/smartdorm/scan_service.py` on the Pi)
+- systemd unit file - installed as `/etc/systemd/system/smartdorm-scan-service.service`
+- `install.sh` and README - for setting up a fresh Pi
+
+On the Pi you will only have: `/srv/smartdorm/scan_service.py`, `/srv/smartdorm/venv/`, and the systemd unit. No other SmartDorm scripts on the Pi.
+
+### Important code (backend)
+
+- `smartdorm/models.py` - Data model (Device, PrintSession, PrintJob, Scan)
+- `smartdorm/views/printing_views.py` - API endpoints
+- `smartdorm/utils/cups_utils.py` - CUPS communication
+- `smartdorm/settings.py` - Configuration (CUPS_SERVER, CUPS_PRINTER_NAME, PI_SCAN_SERVICE_URL)
+
+---
+
+## Developer Checklist
+
+- [ ] Raspberry Pi setup completed (CUPS, scanner, scan service)
+- [ ] Backend configuration checked (`.env`, `ALLOWED_HOSTS`)
+- [ ] Port forwarding configured (Windows, development only)
+- [ ] All services started (Backend, CUPS, scan service)
+- [ ] Test print performed
+- [ ] Test scan performed
+- [ ] Logs understood (Backend, CUPS, scan service)
+- [ ] Data model understood (Device, PrintSession, PrintJob, Scan)
+- [ ] API endpoints known
+- [ ] Cost calculation logic understood (no recalculation, only stored values)
+- [ ] Page count extraction understood (PDF on upload, CUPS on completion)
+- [ ] Production deployment steps understood (Pi static IP, backend URL on Pi, backend .env with Pi IP, SSH via main network)
+
+---
+
+**Last Updated:** 2026-02-14 · **Version:** 1.1
 
 ## Production Deployment
 
@@ -296,154 +362,7 @@ Set the line:
 ```ini
 Environment="SMARTDORM_API_BASE=https://YOUR-PROD-BACKEND-URL/api"
 ```
-Example: `https://smartdorm-api.example.org/api`. Use the URL that is reachable from the building network (and from the Pi once it is in the printing room).
-
-Then:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart smartdorm-scan-service
-```
-
-#### 1.2 Scanner Device (SCAN_DEVICE)
-
-Ensure `SCAN_DEVICE` in the same service file matches the output of `scanimage -L` (with the printer/scanner connected). If you move the Pi and the USB port changes, you may need to run `scanimage -L` again on site and update `SCAN_DEVICE` (see [Scanner Configuration](#scanner-configuration)).
-
-#### 1.3 Optional: Preconfigure Static IP for the Printing Room
-
-If you already know the **printing room's static IP** (from a sheet or admin), you can set it on the Pi now so that when you plug the Pi into that room's port, it uses the correct IP immediately. If you do not know it yet, configure the static IP on site (Part 3). For how to set the static IP, see [Part 2: Static IP on the Pi](#part-2-static-ip-on-the-pi).
-
-#### 1.4 Verify Before Moving
-
-```bash
-sudo systemctl status cups smartdorm-scan-service
-lpstat -p
-scanimage -L
-```
-All should show the printer and scanner correctly.
-
----
-
-### Part 2: Static IP on the Pi
-
-In the live environment, the Pi is connected to a room LAN port that has a **fixed static IP**. The Pi must be configured to use that IP; the building network often does not provide DHCP for that port, or expects the device to use the assigned static IP.
-
-#### Which Networking Stack Does the Pi Use?
-
-Raspberry Pi OS can use different networking stacks. Check on the Pi:
-
-```bash
-systemctl is-active NetworkManager
-systemctl is-active dhcpcd
-ls /etc/netplan/
-```
-
-- **NetworkManager active** → Use **nmtui** (below).
-- **dhcpcd active** (and NetworkManager not active) → Edit `/etc/dhcpcd.conf`: add `interface eth0`, `static ip_address=.../24`, `static routers=...`, then `sudo systemctl restart dhcpcd`.
-- **Netplan config present** (`/etc/netplan/*.yaml`) → Edit the YAML file with `addresses`, `routes`, then `sudo netplan apply`.
-
-#### Setting Static IP with NetworkManager (nmtui)
-
-If `systemctl is-active NetworkManager` prints `active`:
-
-1. Run:
-   ```bash
-   sudo nmtui
-   ```
-2. Choose **Edit a connection** → select the **Ethernet** connection (e.g. eth0) → **Edit**.
-3. Set **IPv4 CONFIGURATION** to **Manual**.
-4. Under **Addresses**, add the room's static IP with prefix, e.g. `10.50.2.15/24` (use the IP from the room's sheet; `/24` is typical for subnet 255.255.255.0).
-5. Set **Gateway** to the value from the sheet (e.g. `10.50.2.1`).
-6. **OK** → **Back** → **Quit**.
-7. If needed, activate the connection:
-   ```bash
-   sudo nmcli connection up "eth0"
-   ```
-   (Connection name may differ; check in nmtui.)
-8. Verify:
-   ```bash
-   ip addr show eth0
-   ```
-
----
-
-### Part 3: On Site (Printing Room)
-
-1. **Obtain the room data:** Get the sheet for the printing room with **static IP**, **gateway**, and optionally netmask/DNS for the LAN port.
-2. **Connect the Pi:** Power the Pi, connect it to the **printer via USB**, and connect the Pi to the **room's LAN port** (not to a local router).
-3. **Set static IP (if not done in Part 1):** SSH or use keyboard/monitor. Run `sudo nmtui` (or the appropriate method from Part 2) and enter the **exact** static IP and gateway from the sheet. Restart networking or reboot if needed, then confirm with `ip addr show eth0`.
-4. **Check scanner device:** Run `scanimage -L`. If the device string changed (e.g. different USB port), update `SCAN_DEVICE` in the scan service file and run `sudo systemctl daemon-reload && sudo systemctl restart smartdorm-scan-service`.
-5. **Note the Pi's IP:** The static IP you configured is the one the **backend** will use. You need it for Part 4.
-
----
-
-### Part 4: Backend Production Configuration
-
-On the **server** where the SmartDorm backend runs:
-
-1. **Environment variables:** In the backend's `.env` (or equivalent), set:
-   ```bash
-   CUPS_SERVER=<printing-room-static-IP>
-   CUPS_PRINTER_NAME=Samsung_C1860_Series
-   PI_SCAN_SERVICE_URL=http://<printing-room-static-IP>:5000
-   ```
-   Replace `<printing-room-static-IP>` with the IP from the printing room sheet (the same IP configured on the Pi).
-2. **ALLOWED_HOSTS:** Ensure the Django `ALLOWED_HOSTS` includes the server's hostname/IP as used in production.
-3. **Restart the backend** so the new environment variables are loaded.
-
-After this, the backend can reach the Pi for printing (CUPS) and for triggering/uploading scans.
-
----
-
-### Part 5: SSH Access When the Pi Is in Another Room
-
-During development the Pi and your laptop are often on the same router (same subnet). In production the Pi is in the printing room with a static IP on the **main network**. To SSH into the Pi from your laptop, the **laptop must also be on the main network**; otherwise it cannot reach the Pi's IP.
-
-- **Correct:** Plug the **laptop** into a **room LAN port** (e.g. in your room) and configure the laptop with **that room's static IP** (as on your room's sheet). Then the laptop is on the main network. You can run:
-  ```bash
-  ssh pi@<printing-room-static-IP>
-  ```
-- **Wrong:** Using the laptop over **Wi‑Fi or cable via your room's router** usually puts the laptop in a private subnet (e.g. 192.168.x.x). The Pi is on the main network (e.g. 10.50.x.x). From that private subnet you typically cannot reach the Pi unless the network explicitly allows it (e.g. special routing). So for reliable SSH, use the laptop on the main network via the wall port.
-
-**Summary:** Laptop on main network (wall port + room's static IP) → SSH to Pi's IP works. Laptop behind room router → often no route to Pi.
-
----
-
-### Part 6: Optional – Access Point in the Printing Room
-
-If the printing room has **only one LAN port** and you want both the Pi and your laptop connected (e.g. to configure or SSH from the same room), an **access point (AP)** at that port can help.
-
-**Requirements:**
-
-- The AP must operate in **bridge / AP mode** (no NAT, no separate subnet). It should only extend the main network so that devices connected to it receive IPs from the main network (or you assign the static IP manually on the Pi). If the AP acts as a router (NAT), the Pi would get a private IP and the backend on the main network could not reach it.
-- **Pi and laptop must have different IPs.** The Pi uses the room's static IP (for the backend). The laptop needs another IP (e.g. from building DHCP via the AP, or another assigned address). Never assign the same IP to two devices.
-- **Client-to-client traffic:** For SSH from laptop to Pi, the main network must allow communication between clients (laptop and Pi). Some networks block this; if you can reach other services on the main network from your laptop, client-to-client is often allowed. Test with `ssh pi@<pi-ip>`.
-
-**Typical setup:** Wall port → AP (bridge mode) → Pi connected to AP's LAN port (static IP set on Pi); laptop connected via Wi‑Fi to AP (gets an IP from main network). Then SSH from laptop to Pi works if the network allows it.
-
----
-
-### Production Deployment Checklist
-
-| Step | Where | Action |
-|------|--------|--------|
-| 1 | Pi (at home/your room) | Set `SMARTDORM_API_BASE` to production backend URL in scan service file; verify `SCAN_DEVICE`; optionally set static IP for printing room if known. |
-| 2 | Pi (at home/your room) | Confirm CUPS and scan service run; test printer and scanner. |
-| 3 | On site | Get printing room sheet (static IP, gateway). Connect Pi to room LAN port and printer USB. |
-| 4 | Pi (on site) | Set static IP (nmtui or other method) to room's static IP; run `scanimage -L` and update `SCAN_DEVICE` if needed; note Pi IP. |
-| 5 | Backend server | Set `CUPS_SERVER` and `PI_SCAN_SERVICE_URL` in `.env` to Pi IP; restart backend. |
-| 6 | Laptop | For SSH to Pi: connect laptop to main network (wall port + room static IP), then `ssh pi@<pi-ip>`. |
-
----
-
-## Configuration
-
-### CUPS Printer Configuration
-
-#### Determine Printer Name
-```bash
-lpstat -p
-# Output: Samsung_C1860_Series
-```
+Example: `https://smartdorm-api.example.org/api`. Use the URL reachable from the building network. Then: `sudo systemctl daemon-reload && sudo systemctl restart smartdorm-scan-service`.
 
 #### Enable Color Printing
 
@@ -518,75 +437,163 @@ sudo systemctl daemon-reload
 sudo systemctl restart smartdorm-scan-service
 ```
 
-**Using script (recommended):**
-```bash
-# Script automatically finds and configures scanner
-cd /tmp
-# Copy script from backend or create manually
-chmod +x fix_scan_device_pi.sh
-./fix_scan_device_pi.sh
-```
+#### 1.2 Scanner Device (SCAN_DEVICE)
 
-**When to update SCAN_DEVICE:**
-- **After Pi reboot:** The USB device number often changes (e.g. `libusb:001:021` → `libusb:001:003`). Run `scanimage -L` and update the service if the value changed.
-- **After unplugging or moving the scanner USB cable:** Same; the device string may change.
-- **Only printer powered off and on (cable unchanged):** Usually the number stays the same; only check if scan stops working.
+Ensure `SCAN_DEVICE` in the same service file matches the output of `scanimage -L` (with the printer/scanner connected). If you move the Pi and the USB port changes, you may need to run `scanimage -L` again on site and update `SCAN_DEVICE` (see [Scanner Configuration](#scanner-configuration)).
 
-**Full sequence to update SCAN_DEVICE (run on the Pi):**
+#### 1.3 Optional: Preconfigure Static IP for the Printing Room
+
+If you already know the **printing room's static IP** (from a sheet or admin), you can set it on the Pi now so that when you plug the Pi into that room's port, it uses the correct IP immediately. If you do not know it yet, configure the static IP on site (Part 3). For how to set the static IP, see [Part 2: Static IP on the Pi](#part-2-static-ip-on-the-pi).
+
+#### 1.4 Verify Before Moving
+
 ```bash
-# 1. Get current device string (use the quoted part from the output)
+sudo systemctl status cups smartdorm-scan-service
+lpstat -p
 scanimage -L
-
-# 2. Optional: view current setting
-sudo systemctl cat smartdorm-scan-service | grep SCAN_DEVICE
-
-# 3. Edit service file, set Environment="SCAN_DEVICE=..." to the value from step 1
-sudo nano /etc/systemd/system/smartdorm-scan-service.service
-
-# 4. Reload and restart
-sudo systemctl daemon-reload
-sudo systemctl restart smartdorm-scan-service
-
-# 5. Verify
-sudo systemctl status smartdorm-scan-service
 ```
+All should show the printer and scanner correctly.
 
-#### Backend URL on the Pi (SMARTDORM_API_BASE)
+---
 
-The scan service on the Pi must know where to upload scans. This is set in the **systemd service file**, not in the SmartDorm codebase:
+### Part 2: Static IP on the Pi
 
-**File on the Pi:** `/etc/systemd/system/smartdorm-scan-service.service`
+In the live environment, the Pi is connected to a room LAN port that has a **fixed static IP**. The Pi must be configured to use that IP; the building network often does not provide DHCP for that port, or expects the device to use the assigned static IP.
 
-**Line:** `Environment="SMARTDORM_API_BASE=..."`
+#### Which Networking Stack Does the Pi Use?
 
-- **Development (backend on your PC via WSL2):** Set to the URL the Pi can reach: typically your Windows host's LAN IP and port, e.g. `http://192.168.0.106:8000/api`. Port forwarding on Windows must be active so that traffic to that IP:8000 reaches the backend in WSL2.
-- **Production (backend on a server in the same network as the Pi):** Set to the server's URL, e.g. `http://192.168.1.10:8000/api` or `http://smartdorm-server.local:8000/api`. No port forwarding is needed; Pi and server are on the same LAN.
-
-After changing the service file, run:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart smartdorm-scan-service
-```
-
-### Backend Configuration
-
-#### Environment Variables (`.env`)
+Raspberry Pi OS can use different networking stacks. Check on the Pi:
 
 ```bash
-# CUPS Server (Raspberry Pi)
+systemctl is-active NetworkManager
+systemctl is-active dhcpcd
+ls /etc/netplan/
+```
+
+- **NetworkManager active** → Use **nmtui** (below).
+- **dhcpcd active** (and NetworkManager not active) → Edit `/etc/dhcpcd.conf`: add `interface eth0`, `static ip_address=.../24`, `static routers=...`, then `sudo systemctl restart dhcpcd`.
+- **Netplan config present** (`/etc/netplan/*.yaml`) → Edit the YAML file with `addresses`, `routes`, then `sudo netplan apply`.
+
+#### Setting Static IP with NetworkManager (nmtui)
+
+If `systemctl is-active NetworkManager` prints `active`:
+
+1. Run:
+   ```bash
+   sudo nmtui
+   ```
+2. Choose **Edit a connection** → select the **Ethernet** connection (e.g. eth0) → **Edit**.
+3. Set **IPv4 CONFIGURATION** to **Manual**.
+4. Under **Addresses**, add the room's static IP with prefix, e.g. `10.50.2.15/24` (use the IP from the room's sheet; `/24` is typical for subnet 255.255.255.0).
+5. Set **Gateway** to the value from the sheet (e.g. `10.50.2.1`).
+6. **OK** → **Back** → **Quit**.
+7. If needed, activate the connection:
+   ```bash
+   sudo nmcli connection up "eth0"
+   ```
+   (Connection name may differ; check in nmtui.)
+8. Verify:
+   ```bash
+   ip addr show eth0
+   ```
+
+---
+
+### Part 3: On Site (Printing Room)
+
+Get the printing room sheet (static IP, gateway). Connect the Pi to the room LAN port and the printer via USB. On the Pi: set the static IP (see Part 2), run `scanimage -L` and update `SCAN_DEVICE` in the scan service file if the device string changed, then restart the scan service. Note the Pi’s IP for the backend `.env` (Part 4).
+
+### Part 4: Backend Production Configuration
+
+On the **server** where the SmartDorm backend runs:
+
+1. **Environment variables:** In the backend's `.env` (or equivalent), set:
+   ```bash
+   CUPS_SERVER=<printing-room-static-IP>
+   CUPS_PRINTER_NAME=Samsung_C1860_Series
+   PI_SCAN_SERVICE_URL=http://<printing-room-static-IP>:5000
+   ```
+   Replace `<printing-room-static-IP>` with the IP from the printing room sheet (the same IP configured on the Pi).
+2. **ALLOWED_HOSTS:** Ensure the Django `ALLOWED_HOSTS` includes the server's hostname/IP as used in production.
+3. **Restart the backend** so the new environment variables are loaded.
+
+---
+
+### Part 5: SSH Access When the Pi Is in Another Room
+
+During development the Pi and your laptop are often on the same router (same subnet). In production the Pi is in the printing room with a static IP on the **main network**. To SSH into the Pi from your laptop, the **laptop must also be on the main network**; otherwise it cannot reach the Pi's IP.
+
+- **Correct:** Plug the **laptop** into a **room LAN port** (e.g. in your room) and configure the laptop with **that room's static IP** (as on your room's sheet). Then the laptop is on the main network. You can run:
+  ```bash
+  ssh pi@<printing-room-static-IP>
+  ```
+- **Wrong:** Using the laptop over **Wi‑Fi or cable via your room's router** usually puts the laptop in a private subnet (e.g. 192.168.x.x). The Pi is on the main network (e.g. 10.50.x.x). From that private subnet you typically cannot reach the Pi unless the network explicitly allows it (e.g. special routing). So for reliable SSH, use the laptop on the main network via the wall port.
+
+**Summary:** Laptop on main network (wall port + room's static IP) → SSH to Pi's IP works. Laptop behind room router → often no route to Pi.
+
+---
+
+### Part 6: Optional – Access Point in the Printing Room
+
+If the printing room has **only one LAN port** and you want both the Pi and your laptop connected (e.g. to configure or SSH from the same room), an **access point (AP)** at that port can help.
+
+**Requirements:**
+
+- The AP must operate in **bridge / AP mode** (no NAT, no separate subnet). It should only extend the main network so that devices connected to it receive IPs from the main network (or you assign the static IP manually on the Pi). If the AP acts as a router (NAT), the Pi would get a private IP and the backend on the main network could not reach it.
+- **Pi and laptop must have different IPs.** The Pi uses the room's static IP (for the backend). The laptop needs another IP (e.g. from building DHCP via the AP, or another assigned address). Never assign the same IP to two devices.
+- **Client-to-client traffic:** For SSH from laptop to Pi, the main network must allow communication between clients (laptop and Pi). Some networks block this; if you can reach other services on the main network from your laptop, client-to-client is often allowed. Test with `ssh pi@<pi-ip>`.
+
+**Typical setup:** Wall port → AP (bridge mode) → Pi connected to AP's LAN port (static IP set on Pi); laptop connected via Wi‑Fi to AP (gets an IP from main network). Then SSH from laptop to Pi works if the network allows it.
+
+---
+
+### Production Deployment Checklist
+
+| Step | Where | Action |
+|------|--------|--------|
+| 1 | Pi (at home/your room) | Set `SMARTDORM_API_BASE` to production backend URL in scan service file; verify `SCAN_DEVICE`; optionally set static IP for printing room if known. |
+| 2 | Pi (at home/your room) | Confirm CUPS and scan service run; test printer and scanner. |
+| 3 | On site | Get printing room sheet (static IP, gateway). Connect Pi to room LAN port and printer USB. |
+| 4 | Pi (on site) | Set static IP (nmtui or other method) to room's static IP; run `scanimage -L` and update `SCAN_DEVICE` if needed; note Pi IP. |
+| 5 | Backend server | Set `CUPS_SERVER` and `PI_SCAN_SERVICE_URL` in `.env` to Pi IP; restart backend. |
+| 6 | Laptop | For SSH to Pi: connect laptop to main network (wall port + room static IP), then `ssh pi@<pi-ip>`. |
+
+---
+
+## Configuration
+
+### Backend (`.env`)
+
+```bash
 CUPS_SERVER=192.168.0.124
 CUPS_PRINTER_NAME=Samsung_C1860_Series
-
-# Pi Scan Service
 PI_SCAN_SERVICE_URL=http://192.168.0.124:5000
 ```
 
-#### ALLOWED_HOSTS
+In `settings.py`, ensure **ALLOWED_HOSTS** includes the host used to reach the backend (e.g. Windows host IP in development: `'192.168.0.106'`).
 
-In `settings.py`, the IP address of the Windows host must be included:
-```python
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '192.168.0.106', ...]
+### CUPS Printer Name
+
+On the Pi, the name used in CUPS (and in `CUPS_PRINTER_NAME`) is shown by:
+```bash
+lpstat -p
 ```
+
+### Scanner Device (SCAN_DEVICE)
+
+The scan service reads the device from the systemd file: `/etc/systemd/system/smartdorm-scan-service.service` → `Environment="SCAN_DEVICE=..."`. Get the value from `scanimage -L` (use the quoted device string).
+
+**When to update:** After a Pi reboot or after unplugging the scanner USB, the device string often changes. Update `SCAN_DEVICE` in the service file, then:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart smartdorm-scan-service
+```
+
+Full procedure is in [Production Deployment](#scanner-configuration) (Scanner Configuration) and [Troubleshooting](#problem-scanner-not-working).
+
+### Backend URL on the Pi (SMARTDORM_API_BASE)
+
+Set in the same systemd file on the Pi. **Development:** URL the Pi can reach (e.g. Windows host LAN IP): `http://192.168.0.106:8000/api`. Port forwarding on Windows must be active. **Production:** Backend server URL (e.g. `https://smartdorm-api.example.org/api`). After changes: `sudo systemctl daemon-reload && sudo systemctl restart smartdorm-scan-service`.
 
 ---
 
@@ -662,61 +669,26 @@ Scanned document (temporarily stored).
 
 ### Migrations
 
-**Important:** The data model development occurred in several steps:
-
-1. **Migration 0006:** Initial creation (Device, PrintSession, PrintJob, Scan)
-   - Created all four models
-   - Device with single `price_per_page` field
-
-2. **Migration 0007:** Translation
-   - Translated all comments and help texts (German → English)
-   - Translated status choices (German → English)
-   - No structural changes
-
-3. **Migration 0008:** Price model extension
-   - Removed: `Device.price_per_page`
-   - Added: `Device.price_per_page_color` (default 0.10 EUR)
-   - Added: `Device.price_per_page_gray` (default 0.05 EUR)
-   - Added: `PrintJob.color_mode` field (choices: 'Color', 'Gray', default: 'Color')
-
-**Migration strategy:**
-- First add new fields with defaults
-- Then remove old field
-- Existing jobs get `color_mode='Color'` (default)
-- No automatic cost recalculation (preserves historical pricing)
+The model evolved over migrations: 0006 (initial Device, PrintSession, PrintJob, Scan); 0007 (translations); 0008 (price_per_page_color / price_per_page_gray, PrintJob.color_mode). Costs are not recalculated when prices change.
 
 ---
 
 ## Troubleshooting
 
-### Problem: Port Forwarding Not Working
+### Problem: Port Forwarding Not Working (Development)
 
-**Symptoms:**
-- Pi cannot reach backend
-- `Connection timed out` errors
+**Symptoms:** Pi cannot reach backend; `Connection timed out` when uploading scans.
 
-**Solution:**
-1. PowerShell must be run as Administrator
-2. Check if WSL2 is running: `wsl hostname -I`
-3. Check if firewall rule exists: `Get-NetFirewallRule -DisplayName "*8000*"`
-4. Verify port forwarding: `netsh interface portproxy show all`
-
-**Windows Firewall Rule:**
-```powershell
-New-NetFirewallRule -DisplayName "Django Dev Server Port 8000" `
-  -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
-```
-
-### Problem: Backend Not Reachable
-
-**Check:**
-```bash
-# Backend running?
-curl http://localhost:8000
-
-# Backend listening on 0.0.0.0?
-# In runserver: python manage.py runserver 0.0.0.0:8000
-```
+**Checks:**
+1. Run PowerShell **as Administrator** for port forwarding.
+2. WSL2 running: `wsl hostname -I`
+3. Port forwarding: `netsh interface portproxy show all`
+4. Windows firewall: allow inbound TCP 8000, e.g. `Get-NetFirewallRule -DisplayName "*8000*"` or create:
+   ```powershell
+   New-NetFirewallRule -DisplayName "Django Dev Server Port 8000" `
+     -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
+   ```
+5. Backend listening on `0.0.0.0:8000`: `curl http://localhost:8000`
 
 ### Problem: CUPS Not Reachable
 
@@ -740,7 +712,7 @@ curl http://<pi-ip>:631
 ```
 scanimage: open of device ... failed: Invalid argument
 ```
-Or: Pi returns 500 "Scan fehlgeschlagen" and the scan never starts.
+Or: Pi returns 500 and the scan never starts.
 
 **Solution:**
 
@@ -763,15 +735,9 @@ Or: Pi returns 500 "Scan fehlgeschlagen" and the scan never starts.
    sudo systemctl restart smartdorm-scan-service
    ```
 
-**When to update SCAN_DEVICE:** After a Pi reboot or after unplugging/replugging the scanner USB, the device number often changes; run `scanimage -L` and update the service as above. For the full command sequence, see the Scanner Configuration section (subsection "When to update SCAN_DEVICE").
+**When to update SCAN_DEVICE:** After a Pi reboot or unplugging the scanner USB, the device string often changes. See [Configuration – Scanner Device](#scanner-device-scan_device) for the procedure.
 
-**Using script (recommended):**
-```bash
-# Script automatically finds and configures scanner
-./fix_scan_device_pi.sh
-```
-
-**Common Issues:**
+**Common issues:**
 
 **USB device port changes:**
 - Symptom: Device name changes after restart (e.g., `libusb:001:005` → `libusb:001:006`)
@@ -896,7 +862,7 @@ sudo systemctl restart cups
    - Cost = `pages × price_per_page_color/gray`
 
 3. **Old jobs with incorrect costs?**
-   - Use `scripts/clear_printing_data.py` to delete all printing data
+   - Delete printing data via Django admin or shell (PrintSession, PrintJob, Scan). A dedicated script is optional.
    - **Important:** Only stored costs are used (no recalculation)
 
 **Cost Calculation Logic:**
@@ -960,19 +926,23 @@ sudo systemctl restart smartdorm-scan-service
 
 ### Clear Printing Data
 
-**Reset all printing data:**
+**Reset all printing data** (e.g. via Django shell):
 ```bash
 cd smartdormv2-backend
-python scripts/clear_printing_data.py --yes
+python manage.py shell
+```
+```python
+from smartdorm.models import PrintSession, PrintJob, Scan
+PrintSession.objects.all().delete()
+PrintJob.objects.all().delete()
+Scan.objects.all().delete()
 ```
 
-**Deletes:**
-- All PrintSessions
-- All PrintJobs (including costs)
-- All Scans
+**Deletes:** All PrintSessions, PrintJobs, Scans. **Preserves:** Device configuration.
 
-**Preserves:**
-- Device configuration (printer settings remain)
+### Database Backup
+
+Before major changes: `python manage.py dumpdata smartdorm.PrintSession smartdorm.PrintJob smartdorm.Scan > printing_backup.json`. Restore: `python manage.py loaddata printing_backup.json`.
 
 ### Monitor Logs
 
@@ -994,25 +964,7 @@ sudo tail -f /var/log/cups/error_log
 
 ### Change Device Settings
 
-**Change prices:**
-- Via admin interface: `/department/printing` → Tab "Einstellungen"
-- Or directly in Django admin
-
-**Disable printer:**
-- Via admin interface: `/department/printing` → Tab "Übersicht" → "Deaktivieren"
-- Or: `Device.is_active = False` in Django
-
-### Database Backup
-
-**Before major changes:**
-```bash
-python manage.py dumpdata smartdorm.PrintSession smartdorm.PrintJob smartdorm.Scan > printing_backup.json
-```
-
-**Restore:**
-```bash
-python manage.py loaddata printing_backup.json
-```
+Change prices or disable the printer via the admin interface: `/department/printing` → "Einstellungen" (Settings) tab for prices; "Übersicht" (Overview) → "Deaktivieren" to disable. Or in Django admin: edit the Device.
 
 ---
 
@@ -1045,111 +997,11 @@ echo "Test" | lp -d Samsung_C1860_Series -o ColorModel=CMYK
 # Migrations
 python manage.py migrate
 
-# Create device
-python scripts/setup_device.py
-
-# Clear printing data
-python scripts/clear_printing_data.py --yes
+# Create device (once per environment)
+python scripts_printing_system/setup_device.py
 
 # Start server
 ./run-server.sh
 ```
 
-### Windows
-
-```powershell
-# Port forwarding
-.\scripts\wsl_port_forward.ps1
-
-# Check port forwarding
-netsh interface portproxy show all
-
-# Check firewall rule
-Get-NetFirewallRule -DisplayName "*8000*"
-```
-
----
-
-## API Endpoints
-
-### Tenant Endpoints
-
-- `GET /api/tenants/printing/device-status/` - Device status
-- `GET /api/tenants/printing/my-costs/` - My costs
-- `GET /api/tenants/printing/my-sessions/` - My sessions
-- `GET /api/tenants/printing/my-scans/` - My scans
-- `POST /api/tenants/printing/sessions/start/` - Start session
-- `POST /api/tenants/printing/sessions/{id}/end/` - End session
-- `POST /api/tenants/printing/sessions/{id}/print/` - Create print job
-  - Requires: `multipart/form-data` with `file`, `color_mode`, `copies`
-- `POST /api/tenants/printing/sessions/{id}/scan/start/` - Start scan
-- `GET /api/tenants/printing/sessions/{id}/` - Session details (with jobs and scans)
-- `GET /api/tenants/printing/scans/{id}/download/` - Download scan
-
-### Admin Endpoints
-
-- `GET /api/printing/device/{id}/overview/` - Device overview (status, active session, statistics)
-- `GET /api/printing/device/{id}/statistics/` - Detailed statistics
-- `PUT /api/printing/device/{id}/settings/` - Update settings (prices, max session duration)
-- `POST /api/printing/device/{id}/toggle-active/` - Toggle device active/inactive
-- `POST /api/printing/device/{id}/terminate-session/` - Terminate active session
-- `GET /api/printing/device/{id}/history/` - Device history (sessions, jobs)
-- `GET /api/printing/tenant-billing-overview/` - Billing overview (all tenants with costs)
-
-### Pi Endpoints (No Authentication Required)
-
-- `GET /api/printing/active-session/` - Query active session
-- `POST /api/printing/scans/` - Upload scan (from Pi scan service)
-
----
-
-## Files and Scripts
-
-### Backend Scripts
-
-- `scripts/clear_printing_data.py` - Delete all printing data
-- `scripts/setup_device.py` - Create device in database
-- `scripts/wsl_port_forward.ps1` - Port forwarding (Windows)
-- `scripts/debug_printer_options.py` - Debug CUPS printer options
-
-### Pi Scripts
-
-- `scripts/pi_scan_service.py` - Scan service (HTTP server on Pi)
-- `scripts/start_pi_services.sh` - Start all Pi services
-- `scripts/fix_scan_device_pi.sh` - Fix scanner device configuration
-- `scripts/fix_color_printing_pi.sh` - Fix color printing (PPD modification, deprecated)
-- `scripts/switch_to_color_driver.sh` - Switch to Gutenprint driver (recommended)
-
-### Important Files
-
-**Backend:**
-- `smartdorm/models.py` - Data model (Device, PrintSession, PrintJob, Scan)
-- `smartdorm/views/printing_views.py` - API endpoints
-- `smartdorm/utils/cups_utils.py` - CUPS communication
-- `smartdorm/settings.py` - Configuration (CUPS_SERVER, CUPS_PRINTER_NAME)
-
-**Pi:**
-- `/etc/systemd/system/smartdorm-scan-service.service` - Scan service configuration
-- `/etc/cups/ppd/Samsung_C1860_Series.ppd` - Printer PPD file (if using Generic PCL driver)
-
----
-
-## Developer Checklist
-
-- [ ] Raspberry Pi setup completed (CUPS, scanner, scan service)
-- [ ] Backend configuration checked (`.env`, `ALLOWED_HOSTS`)
-- [ ] Port forwarding configured (Windows, development only)
-- [ ] All services started (Backend, CUPS, scan service)
-- [ ] Test print performed
-- [ ] Test scan performed
-- [ ] Logs understood (Backend, CUPS, scan service)
-- [ ] Data model understood (Device, PrintSession, PrintJob, Scan)
-- [ ] API endpoints known
-- [ ] Cost calculation logic understood (no recalculation, only stored values)
-- [ ] Page count extraction understood (PDF on upload, CUPS on completion)
-- [ ] Production deployment steps understood (Pi static IP, backend URL on Pi, backend .env with Pi IP, SSH via main network)
-
----
-
-**Last Updated:** 2026-02-20  
-**Version:** 1.1
+For API endpoints, see [API Endpoints (Reference)](#api-endpoints-reference) above.

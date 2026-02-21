@@ -346,7 +346,7 @@ def session_detail_view(request, session_id):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Aktualisiere Status von aktiven Jobs (PRINTING oder PENDING mit CUPS-Job-ID)
+        # Update status of active jobs (PRINTING or PENDING with CUPS job ID)
         active_jobs = PrintJob.objects.filter(
             session=session,
             cups_job_id__isnull=False
@@ -420,7 +420,7 @@ def session_detail_view(request, session_id):
                         # For now: 1 page as default
                         if job.pages is None:
                             job.pages = 1
-                        # Kosten werden automatisch in job.save() berechnet (via Model.save() Methode)
+                        # Cost is calculated automatically in job.save() (via Model.save())
                         job.save()
                         logger.info(f"Job {job.cups_job_id} not found in CUPS, marked as completed (assumed finished)")
         
@@ -660,7 +660,7 @@ def session_jobs_view(request, session_id):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Aktualisiere Status von aktiven Jobs (PRINTING oder PENDING mit CUPS-Job-ID)
+        # Update status of active jobs (PRINTING or PENDING with CUPS job ID)
         active_jobs = PrintJob.objects.filter(
             session=session,
             cups_job_id__isnull=False
@@ -734,7 +734,7 @@ def session_jobs_view(request, session_id):
                         # For now: 1 page as default
                         if job.pages is None:
                             job.pages = 1
-                        # Kosten werden automatisch in job.save() berechnet (via Model.save() Methode)
+                        # Cost is calculated automatically in job.save() (via Model.save())
                         job.save()
                         logger.info(f"Job {job.cups_job_id} not found in CUPS, marked as completed (assumed finished)")
         
