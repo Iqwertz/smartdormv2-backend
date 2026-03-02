@@ -27,6 +27,7 @@ from django.db.models import F
 from django.db import transaction
 from django.core.cache import cache
 from rest_framework.parsers import MultiPartParser, FormParser
+from dateutil.relativedelta import relativedelta
 
 
 from ..permissions import GroupAndEmployeeTypePermission
@@ -265,7 +266,7 @@ def decide_departure_view(request):
     if decision == 'POSTPONE':
         departure.status = Departure.Status.POSTPONED
         departure.save()
-        # Create a new claim for extension
+        #Create a new claim for extension
         max_id_result = Claim.objects.aggregate(max_id=Max('id'))
         new_id = (max_id_result['max_id'] or 0) + 1
         Claim.objects.create(
@@ -288,6 +289,18 @@ def decide_departure_view(request):
         )
         
         #Send email to tenant
+        
+        #calculate deadline for signing the extension application, which is 15th of the month 3 months before the current move_out date, or if that is in the past, 15th of the next month
+        move_out_date = tenant.move_out
+        today = timezone.now().date()
+        move_out_month = move_out_date.replace(day=1)
+        three_months_before = move_out_month - relativedelta(months=3)
+        deadline = three_months_before.replace(day=15)
+        if deadline < today:
+            next_month = deadline + relativedelta(months=1)
+            deadline = next_month.replace(day=15)
+        deadline_str = deadline.strftime("%d.%m.%Y")
+        
         email_utils.send_email_message(
             recipient_list=[tenant.email],
             subject=f"Wohnzeitverlängerungsbewerbung",
@@ -295,6 +308,7 @@ def decide_departure_view(request):
             context={
                 'name': f"{tenant.name} {tenant.surname}",
                 'room': tenant.current_room if tenant.current_room else 'Unbekannt',
+                'deadline': deadline_str,
             },
             dynamic_pdf_template_path='pdf/Wohnzeitverlaengerung-Bewerbungsformular.pdf',
             dynamic_pdf_data=pdf_data,
