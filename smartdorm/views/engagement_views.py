@@ -6,7 +6,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Max, Sum, Prefetch
+from django.db.models import Max, Sum, Count, Prefetch
 import uuid
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
@@ -1108,6 +1108,158 @@ def tenant_overview_data_view(request):
 
     serializer = TenantOverviewSerializer(tenants, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def tenant_statistics_view(request):
+    """
+    Returns aggregate statistics over tenants.
+
+    Query parameter:
+      ?scope=current  - only tenants currently living in the dorm (default)
+      ?scope=all      - all tenants ever stored in the database
+    """
+    tenant_statistics_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    scope = request.GET.get('scope', 'current').lower()
+    if scope not in ['current', 'all']:
+        return Response(
+            {"error": "Parameter 'scope' must be 'current' or 'all'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    today = timezone.now().date()
+
+    if scope == 'current':
+        base_qs = Tenant.objects.filter(move_in__lte=today, move_out__gte=today)
+    else:
+        base_qs = Tenant.objects.all()
+
+    tenants_list = list(base_qs.values(
+        'id', 'birthday', 'move_in', 'move_out',
+        'gender', 'nationality', 'university', 'study_field',
+        'current_points', 'current_floor'
+    ))
+
+    total = len(tenants_list)
+    if total == 0:
+        return Response({"scope": scope, "total_tenants": 0})
+
+    def _avg(lst):
+        return round(sum(lst) / len(lst), 2) if lst else None
+
+    # --- Age ---
+    ages = []
+    for t in tenants_list:
+        bd = t['birthday']
+        if bd:
+            age = today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+            ages.append(age)
+
+    # --- Stay duration (actual days lived so far / in total) ---
+    stay_days = []
+    for t in tenants_list:
+        mi = t['move_in']
+        mo = t['move_out']
+        if mi:
+            end = min(mo, today) if mo else today
+            days = (end - mi).days
+            if days >= 0:
+                stay_days.append(days)
+
+    avg_stay_days = _avg(stay_days)
+    avg_stay_months = round(avg_stay_days / 30.44, 1) if avg_stay_days is not None else None
+
+    # --- Gender distribution ---
+    gender_counts = defaultdict(int)
+    for t in tenants_list:
+        gender_counts[(t['gender'] or 'Unbekannt').strip()] += 1
+
+    # --- Nationality breakdown ---
+    nationality_counts = defaultdict(int)
+    for t in tenants_list:
+        nationality_counts[(t['nationality'] or 'Unbekannt').strip()] += 1
+
+    # --- University breakdown ---
+    university_counts = defaultdict(int)
+    for t in tenants_list:
+        university_counts[(t['university'] or 'Unbekannt').strip()] += 1
+
+    # --- Study field breakdown ---
+    study_field_counts = defaultdict(int)
+    for t in tenants_list:
+        study_field_counts[(t['study_field'] or 'Unbekannt').strip()] += 1
+
+    # --- Points ---
+    points_values = [
+        float(t['current_points'])
+        for t in tenants_list
+        if t['current_points'] is not None
+    ]
+
+    # --- Floor distribution ---
+    floor_counts = defaultdict(int)
+    for t in tenants_list:
+        floor_counts[(t['current_floor'] or 'Unbekannt').strip()] += 1
+
+    # --- Engagements per tenant ---
+    tenant_ids = [t['id'] for t in tenants_list]
+    eng_per_tenant_qs = (
+        Engagement.objects
+        .filter(tenant_id__in=tenant_ids)
+        .values('tenant_id')
+        .annotate(count=Count('id'))
+    )
+    eng_count_map = {row['tenant_id']: row['count'] for row in eng_per_tenant_qs}
+    eng_counts_per_tenant = [eng_count_map.get(t['id'], 0) for t in tenants_list]
+    tenants_with_any_engagement = sum(1 for c in eng_counts_per_tenant if c > 0)
+    avg_engagements = _avg(eng_counts_per_tenant)
+
+    response_data = {
+        "scope": scope,
+        "total_tenants": total,
+        "age": {
+            "average": _avg(ages),
+            "min": min(ages) if ages else None,
+            "max": max(ages) if ages else None,
+        },
+        "stay_duration": {
+            "average_days": avg_stay_days,
+            "average_months": avg_stay_months,
+            "min_days": min(stay_days) if stay_days else None,
+            "max_days": max(stay_days) if stay_days else None,
+        },
+        "gender_distribution": dict(
+            sorted(gender_counts.items(), key=lambda x: -x[1])
+        ),
+        "nationalities": dict(
+            sorted(nationality_counts.items(), key=lambda x: -x[1])
+        ),
+        "universities": dict(
+            sorted(university_counts.items(), key=lambda x: -x[1])
+        ),
+        "study_fields": dict(
+            sorted(study_field_counts.items(), key=lambda x: -x[1])
+        ),
+        "points": {
+            "average": _avg(points_values),
+            "min": min(points_values) if points_values else None,
+            "max": max(points_values) if points_values else None,
+            "total": round(sum(points_values), 2) if points_values else 0,
+        },
+        "floor_distribution": dict(
+            sorted(floor_counts.items(), key=lambda x: x[0])
+        ),
+        "engagements": {
+            "tenants_with_any_engagement": tenants_with_any_engagement,
+            "tenants_without_engagement": total - tenants_with_any_engagement,
+            "average_per_tenant": avg_engagements,
+        },
+    }
+
+    return Response(response_data, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
