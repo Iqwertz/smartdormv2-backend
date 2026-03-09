@@ -1091,7 +1091,7 @@ def tenant_overview_data_view(request):
     """
     Retrieves a list of all current tenants, including their full details and all associated engagements.
     """
-    tenant_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat", "ADMIN"]
+    tenant_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat", "HSV-Vertreter", "ADMIN"]
     today = timezone.now().date()
     
     # Prefetch engagements and their related departments to avoid N+1 queries
