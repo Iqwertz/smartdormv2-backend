@@ -79,6 +79,7 @@ engagement_urlpatterns = [
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
     path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
     path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),
+    path('misc/tenant-statistics/', engagement_views.tenant_statistics_view, name='misc-tenant-statistics'),
 ]
 
 
@@ -124,6 +125,7 @@ department_urlpatterns = [
     path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
     path('tenant-data/<int:tenant_id>/rentals/', department_views.list_tenant_rentals_view, name='department-list-rentals'),
     path('tenant-data/<int:tenant_id>/move/', department_views.move_tenant_view, name='department-move-tenant'),
+    path('rentals/<int:rental_id>/delete/', department_views.delete_rental_view, name='department-delete-rental'),
     path('create-new-tenant/', department_views.create_new_tenant_view, name='department-create-new-tenant'),
     # Subtenant management
     path('subtenants/', include(subtenant_urlpatterns)),

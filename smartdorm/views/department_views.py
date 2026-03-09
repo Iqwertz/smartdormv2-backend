@@ -159,6 +159,84 @@ def list_tenant_rentals_view(request, tenant_id):
     serializer = RentalSerializer(rentals, many=True)
     return Response(serializer.data)
 
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def delete_rental_view(request, rental_id):
+    """
+    Deletes a rental record, effectively undoing a wrongly-done tenant move.
+    - Restores the previous rental's move-out date to the deleted rental's move-out date.
+    - Updates the tenant's current_room and current_floor from the latest remaining rental.
+    - Updates LDAP floor groups if the floor changes.
+    - Returns an error if deleting would leave the tenant with no rental records.
+    """
+    delete_rental_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    delete_rental_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    rental = get_object_or_404(Rental.objects.select_related('room', 'tenant'), id=rental_id)
+    tenant = rental.tenant
+
+    # Guard: tenant must always have at least one rental
+    rental_count = Rental.objects.filter(tenant=tenant).count()
+    if rental_count <= 1:
+        return Response(
+            {"error": "Cannot delete this rental: the tenant must have at least one rental record."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Find the rental that was "closed" when this move was created.
+    # move_tenant_view sets previous rental's moved_out = move_date - 1 day,
+    # so we look for a rental ending the day before this rental's move_in.
+    previous_rental = Rental.objects.filter(
+        tenant=tenant,
+        moved_out=rental.move_in - timedelta(days=1)
+    ).exclude(id=rental.id).first()
+
+    if previous_rental:
+        # Restore the previous rental's end date to match the one being deleted
+        previous_rental.moved_out = rental.moved_out
+        previous_rental.save()
+        logger.info(
+            f"Restored rental {previous_rental.id} moved_out to {previous_rental.moved_out} "
+            f"after deleting rental {rental.id} for tenant {tenant.username}."
+        )
+
+    rental.delete()
+
+    # Update tenant's denormalized room/floor from the latest remaining rental
+    latest_rental = Rental.objects.filter(tenant=tenant).select_related('room').order_by('-move_in').first()
+    old_floor = tenant.current_floor
+    new_floor = latest_rental.room.floor
+
+    tenant.current_room = latest_rental.room.name
+    tenant.current_floor = new_floor
+    tenant.save()
+
+    # Update LDAP floor groups if the floor changed
+    try:
+        if old_floor != new_floor:
+            group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+            if old_floor:
+                old_group_dn = f"cn={old_floor},{group_base_dn}"
+                ldap_utils.remove_user_from_group(tenant.username, old_group_dn)
+                logger.info(f"Removed user '{tenant.username}' from LDAP group for floor '{old_floor}'.")
+            if new_floor:
+                new_group_dn = f"cn={new_floor},{group_base_dn}"
+                ldap_utils.add_user_to_group(tenant.username, new_group_dn)
+                logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+    except Exception as e:
+        logger.error(
+            f"Error updating LDAP groups for tenant '{tenant.username}' during rental deletion: {e}",
+            exc_info=True
+        )
+
+    return Response(
+        {"message": f"Rental deleted. Tenant's current room updated to '{tenant.current_room}'."},
+        status=status.HTTP_200_OK
+    )
+
+
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -250,7 +328,7 @@ def create_new_tenant_view(request):
     base_username = (data['name'][0] + "." + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
     username = base_username
     counter = 1
-    while ldap_utils.ldap_username_exists(username):
+    while ldap_utils.ldap_username_exists(username) or Tenant.objects.filter(username=username).exists():
         username = f"{base_username}{counter}"
         counter += 1
     print(f"Generated unique username: {username}")
