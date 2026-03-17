@@ -149,6 +149,17 @@ def my_costs_view(request):
         # Calculate pages
         total_pages = sum(job.pages for job in all_jobs if job.pages) or 0
         this_month_pages = sum(job.pages for job in this_month_jobs if job.pages) or 0
+
+        # Outstanding debt: completed jobs that have not been settled yet
+        debt_jobs_qs = PrintJob.objects.filter(
+            tenant=tenant,
+            status=PrintJob.Status.COMPLETED,
+            cost__isnull=False,
+            settled_at__isnull=True,
+        )
+        debt = sum(job.cost for job in debt_jobs_qs) or Decimal('0.00')
+        debt_pages = sum(job.pages for job in debt_jobs_qs if job.pages) or 0
+        debt_jobs = debt_jobs_qs.count()
         
         serializer = MyCostsSerializer({
             'total_cost': total_cost,
@@ -156,7 +167,10 @@ def my_costs_view(request):
             'total_pages': total_pages,
             'this_month_pages': this_month_pages,
             'total_jobs': all_jobs.count(),
-            'this_month_jobs': this_month_jobs.count()
+            'this_month_jobs': this_month_jobs.count(),
+            'debt': debt,
+            'debt_pages': debt_pages,
+            'debt_jobs': debt_jobs,
         })
         
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -1483,6 +1497,17 @@ def tenant_billing_overview_view(request):
             total_cost = sum(job.cost for job in tenant_jobs) or Decimal('0.00')
             total_pages = sum(job.pages for job in tenant_jobs if job.pages) or 0
             total_jobs = tenant_jobs.count()
+
+            # Outstanding debt (not yet settled)
+            tenant_debt_jobs = PrintJob.objects.filter(
+                tenant=tenant,
+                status=PrintJob.Status.COMPLETED,
+                cost__isnull=False,
+                settled_at__isnull=True,
+            )
+            debt = sum(job.cost for job in tenant_debt_jobs) or Decimal('0.00')
+            debt_pages = sum(job.pages for job in tenant_debt_jobs if job.pages) or 0
+            debt_jobs = tenant_debt_jobs.count()
             
             # Count sessions
             total_sessions = PrintSession.objects.filter(tenant=tenant).count()
@@ -1500,6 +1525,9 @@ def tenant_billing_overview_view(request):
                     'total_pages': total_pages,
                     'total_jobs': total_jobs,
                     'total_sessions': total_sessions,
+                    'debt': str(debt),
+                    'debt_pages': debt_pages,
+                    'debt_jobs': debt_jobs,
                 })
         
         # Sort by surname, name
@@ -1513,6 +1541,54 @@ def tenant_billing_overview_view(request):
         logger.error(f"Error in tenant_billing_overview_view: {e}", exc_info=True)
         return Response(
             {"error": "An error occurred while retrieving billing overview."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def settle_tenant_debt_view(request, tenant_id: int):
+    """
+    POST /api/printing/tenant/<tenant_id>/settle-debt/
+
+    Marks all outstanding completed print jobs as settled by setting settled_at=now().
+    """
+    settle_tenant_debt_view.required_employee_types = ['DEPARTMENT']
+    settle_tenant_debt_view.required_groups = ['VERWALTUNG', 'ADMIN']
+
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        now = timezone.now()
+
+        qs = PrintJob.objects.filter(
+            tenant=tenant,
+            status=PrintJob.Status.COMPLETED,
+            cost__isnull=False,
+            settled_at__isnull=True,
+        )
+        updated = qs.update(settled_at=now)
+
+        return Response(
+            {
+                "message": "Debt settled.",
+                "tenant_id": tenant.id,
+                "settled_jobs": updated,
+                "settled_at": now,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Tenant.DoesNotExist:
+        return Response(
+            {"error": "Tenant not found."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error in settle_tenant_debt_view: {e}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while settling debt."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

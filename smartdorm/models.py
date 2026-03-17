@@ -378,6 +378,11 @@ class PrintJob(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this job was settled/paid by administration. NULL = still outstanding."
+    )
     error_message = models.TextField(null=True, blank=True)
     cups_job_id = models.CharField(max_length=255, null=True, blank=True, help_text="CUPS Job ID for status query")
     external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)

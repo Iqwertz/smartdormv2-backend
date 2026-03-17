@@ -472,6 +472,9 @@ class TenantBillingOverviewSerializer(serializers.Serializer):
     total_pages = serializers.IntegerField()
     total_jobs = serializers.IntegerField()
     total_sessions = serializers.IntegerField()
+    debt = serializers.CharField()
+    debt_pages = serializers.IntegerField()
+    debt_jobs = serializers.IntegerField()
 
 class MyCostsSerializer(serializers.Serializer):
     """Serializer for user costs overview"""
@@ -481,3 +484,6 @@ class MyCostsSerializer(serializers.Serializer):
     this_month_pages = serializers.IntegerField()
     total_jobs = serializers.IntegerField()
     this_month_jobs = serializers.IntegerField()
+    debt = serializers.DecimalField(max_digits=10, decimal_places=2)
+    debt_pages = serializers.IntegerField()
+    debt_jobs = serializers.IntegerField()

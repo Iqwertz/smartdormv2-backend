@@ -170,6 +170,7 @@ printing_urlpatterns = [
     path('device/<int:device_id>/toggle-sessions/', printing_views.device_toggle_sessions_view, name='printing-device-toggle-sessions'),
     path('device/<int:device_id>/terminate-session/', printing_views.device_terminate_session_view, name='printing-device-terminate-session'),
     path('device/<int:device_id>/history/', printing_views.device_history_view, name='printing-device-history'),
+    path('tenant/<int:tenant_id>/settle-debt/', printing_views.settle_tenant_debt_view, name='printing-tenant-settle-debt'),
 ]
 
 urlpatterns = [
