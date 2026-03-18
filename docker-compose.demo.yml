@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartdorm_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-pg}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-demo_password}
+    volumes:
+      - demo_pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  ldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      LDAP_ORGANISATION: "Schollheim Demo"
+      LDAP_DOMAIN: "schollheim.net"
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:-demo_ldap_admin}
+    volumes:
+      - ./scripts/demo_ldap_seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/demo_ldap_seed.ldif:ro
+    restart: unless-stopped
+
+  django:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    env_file: .env.demo
+    environment:
+      DB_HOST: db
+      REDIS_URL: redis://redis:6379/1
+      LDAP_URI: ldap://ldap:389
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+      - ldap
+    restart: unless-stopped
+
+  reset_cron:
+    image: alpine:latest
+    depends_on:
+      - django
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.demo.yml:/app/docker-compose.demo.yml
+    command: >
+      sh -c "apk add --no-cache docker-cli docker-cli-compose && 
+      echo '0 0 * * * docker compose -f /app/docker-compose.demo.yml exec -T django python manage.py generate_demo_data' > /etc/crontabs/root && 
+      crond -f"
+    restart: unless-stopped
+
+volumes:
+  demo_pg_data:

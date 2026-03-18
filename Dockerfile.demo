@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libpq-dev gcc python3-dev libldap2-dev libsasl2-dev \
+    ldap-utils netcat-traditional \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir gunicorn Faker pytest
+
+COPY . .
+
+# We patch the migration files inside the container so legacy tables get created in the demo DB
+RUN sed -i "s/'managed': False/'managed': True/g" smartdorm/migrations/*.py
+
+# Make entrypoint executable
+RUN chmod +x scripts/demo-entrypoint.sh
+
+CMD ["scripts/demo-entrypoint.sh"]

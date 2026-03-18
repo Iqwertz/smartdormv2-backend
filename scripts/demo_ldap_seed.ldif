@@ -1,0 +1,31 @@
+dn: ou=users,dc=schollheim,dc=net
+objectClass: organizationalUnit
+ou: users
+
+dn: ou=groups,dc=schollheim,dc=net
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=groups2,dc=schollheim,dc=net
+objectClass: organizationalUnit
+ou: groups2
+
+dn: ou=roles,dc=schollheim,dc=net
+objectClass: organizationalUnit
+ou: roles
+
+dn: cn=admin,ou=roles,dc=schollheim,dc=net
+objectClass: groupOfNames
+cn: admin
+member: cn=demo,ou=users,dc=schollheim,dc=net
+
+dn: cn=demo,ou=users,dc=schollheim,dc=net
+objectClass: inetOrgPerson
+objectClass: top
+objectClass: organizationalPerson
+cn: demo
+sn: User
+givenName: Demo
+mail: demo@schollheim.net
+employeeType: DEPARTMENT
+userPassword: demo
