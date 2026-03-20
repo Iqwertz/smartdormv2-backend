@@ -3,10 +3,11 @@ version: '3.8'
 services:
   db:
     image: postgres:15-alpine
+    env_file: .env.demo
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-smartdorm_demo}
-      POSTGRES_USER: ${POSTGRES_USER:-pg}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-demo_password}
+      POSTGRES_DB: smartdorm_demo
+      POSTGRES_USER: pg
+      POSTGRES_PASSWORD: demo_password
     volumes:
       - demo_pg_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -16,13 +17,8 @@ services:
     restart: unless-stopped
 
   ldap:
-    image: osixia/openldap:1.5.0
-    environment:
-      LDAP_ORGANISATION: "Schollheim Demo"
-      LDAP_DOMAIN: "schollheim.net"
-      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:-demo_ldap_admin}
-    volumes:
-      - ./scripts/demo_ldap_seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/demo_ldap_seed.ldif:ro
+    build:
+      context: ./scripts/demo-ldap
     restart: unless-stopped
 
   django:

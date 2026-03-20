@@ -14,8 +14,10 @@ RUN pip install --no-cache-dir gunicorn Faker pytest
 
 COPY . .
 
-# We patch the migration files inside the container so legacy tables get created in the demo DB
-RUN sed -i "s/'managed': False/'managed': True/g" smartdorm/migrations/*.py
+# We patch the models inside the container to make them managed,
+# and remove old migrations so we get a fresh correct schema for the demo DB.
+RUN sed -i 's/managed = False//g' smartdorm/models.py
+RUN rm -f smartdorm/migrations/00*.py
 
 # Make entrypoint executable
 RUN chmod +x scripts/demo-entrypoint.sh
