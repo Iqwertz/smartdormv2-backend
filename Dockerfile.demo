@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir gunicorn Faker pytest
 
 COPY . .
+RUN mkdir -p /app/logs
 
 # We patch the models inside the container to make them managed,
 # and remove old migrations so we get a fresh correct schema for the demo DB.

@@ -33,7 +33,7 @@ BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker-compose.demo.yml up -d
 Start the demo stack. By default, it maps the Django backend entirely to **port 8005** on your host to avoid clashing with other services on `8000`.
 
 ```bash
-BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker-compose.demo.yml up -d --build
+DOCKER_BUILDKIT=0 docker compose -f docker-compose.demo.yml up -d --build
 ```
 > **Note**: It may take a minute or two for the `demo-entrypoint.sh` to initialize the database and generate the 600 fake users before the web server responds.
 
@@ -45,12 +45,12 @@ Create a new Nginx configuration file for your domain.
 sudo nano /etc/nginx/sites-available/smartdorm_demo
 ```
 
-Add the following configuration. This proxies requests from `smartdorm.juliushussl.at` to your docker container running on port `8005`:
+Add the following configuration. This proxies requests from `smartdorm-api.juliushussl.at` to your docker container running on port `8005`:
 
 ```nginx
 server {
     listen 80;
-    server_name smartdorm.juliushussl.at;
+    server_name smartdorm-api.juliushussl.at;
 
     location / {
         proxy_pass http://127.0.0.1:8005;
