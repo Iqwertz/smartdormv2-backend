@@ -22,4 +22,10 @@ RUN rm -f smartdorm/migrations/00*.py
 # Make entrypoint executable
 RUN chmod +x scripts/demo-entrypoint.sh
 
+
+# Overwrite settings for the demo environment to allow CORS from the demo URL
+RUN echo "CORS_ALLOW_ALL_ORIGINS = True" >> smartdorm/settings.py
+RUN echo "CSRF_TRUSTED_ORIGINS = ['http://smartdorm.juliushussl.at', 'https://smartdorm.juliushussl.at', 'https://smartdorm-api.juliushussl.at']" >> smartdorm/settings.py
+RUN echo "CSRF_COOKIE_DOMAIN = None" >> smartdorm/settings.py
+RUN echo "SESSION_COOKIE_DOMAIN = None" >> smartdorm/settings.py
 CMD ["scripts/demo-entrypoint.sh"]

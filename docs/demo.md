@@ -1,6 +1,6 @@
 # SmartDorm Demo Environment
 
-To facilitate local development, testing, and demonstration without needing access to the production database or live LDAP servers, this repository includes a self-contained, containerized demo environment.
+To demonstrate the capabiilities of SmartDorm to external people, without exposing sensible data from the production database or live LDAP servers, this repository includes a self-contained, containerized demo environment. It is not meant for testing but just to deploy it on a vps to demo the application to external people without exposing production secrets.
 
 ## Overview
 
