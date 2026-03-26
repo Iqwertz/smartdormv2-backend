@@ -27,7 +27,8 @@ RUN chmod +x scripts/demo-entrypoint.sh
 # Overwrite settings for the demo environment to allow CORS from the demo URL
 RUN echo "CORS_ALLOW_ALL_ORIGINS = True" >> smartdorm/settings.py
 RUN echo "CSRF_TRUSTED_ORIGINS = ['http://smartdorm.juliushussl.at', 'https://smartdorm.juliushussl.at', 'https://smartdorm-api.juliushussl.at']" >> smartdorm/settings.py
-RUN echo "CSRF_COOKIE_DOMAIN = None" >> smartdorm/settings.py
-RUN echo "SESSION_COOKIE_DOMAIN = None" >> smartdorm/settings.py
+RUN echo "CSRF_COOKIE_DOMAIN = '.juliushussl.at'" >> smartdorm/settings.py
+RUN echo "SESSION_COOKIE_DOMAIN = '.juliushussl.at'" >> smartdorm/settings.py
 RUN echo "ALLOWED_HOSTS += ['smartdorm.juliushussl.at', 'smartdorm-api.juliushussl.at']" >> smartdorm/settings.py
+RUN echo "SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')" >> smartdorm/settings.py
 CMD ["scripts/demo-entrypoint.sh"]
