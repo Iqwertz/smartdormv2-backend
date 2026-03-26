@@ -115,9 +115,15 @@ class Command(BaseCommand):
                         sublet=0.0,
                         tel_number=fake.phone_number()[:20],
                         university=random.choice(["LMU", "TUM", "HM"]),
-                        username=f"tenant{tenant_id}",
+                        username="demo" if (is_current and tenant_id == 600) else f"tenant{tenant_id}",
                         new_address=fake.address()[:200] if not is_current else None
                     )
+                    
+                    if is_current and tenant_id == 600:
+                        t.name = "Demo"
+                        t.surname = "User"
+                        t.email = "demo@schollheim.net"
+                        
                     tenants.append(t)
                     if is_current:
                         current_tenants.append(t)
@@ -167,7 +173,7 @@ class Command(BaseCommand):
             self.stdout.write('Generating DepositBank infos...')
             deposit_banks = []
             for t in tenants:
-                if random.random() < 0.8: # 80% have a deposit bank added
+                if random.random() < 0.8 or t.username == 'demo': # 80% have a deposit bank added
                     deposit_banks.append(DepositBank(
                         tenant=t,
                         name=fake.company()[:255],
@@ -182,8 +188,9 @@ class Command(BaseCommand):
             eng_id = 1
             app_id = 1
             for t in tenants:
-                if random.random() < 0.4:
-                    for _ in range(random.randint(1, 4)):
+                if random.random() < 0.4 or t.username == 'demo':
+                    num_engagements = random.randint(1, 4) if t.username != 'demo' else random.randint(3, 5)
+                    for _ in range(num_engagements):
                         d = random.choice(departments)
                         engagements.append(Engagement(
                             id=eng_id,
@@ -196,7 +203,7 @@ class Command(BaseCommand):
                             tenant=t
                         ))
                         eng_id += 1
-                if t in current_tenants and random.random() < 0.15:
+                if t in current_tenants and (random.random() < 0.15 or t.username == 'demo'):
                     d = random.choice(departments)
                     applications.append(EngagementApplication(
                         id=app_id,
@@ -216,13 +223,13 @@ class Command(BaseCommand):
             claims = []
             claim_id = 1
             for t in tenants:
-                if random.random() < 0.2:
+                if random.random() < 0.2 or t.username == 'demo':
                     extensions.append(DepartmentExtension(
                         tenant=t,
                         months=random.choice([1, 2, 6]),
-                        note="Good engagement"
+                        note="Good engagement demo" if t.username == 'demo' else "Good engagement"
                     ))
-                if random.random() < 0.2:
+                if random.random() < 0.2 or t.username == 'demo':
                     claims.append(Claim(
                         id=claim_id,
                         created_on=t.move_in + timedelta(days=30),
@@ -240,7 +247,7 @@ class Command(BaseCommand):
             subtenants = []
             subtenant_id = 1
             for t in tenants:
-                if random.random() < 0.15:
+                if random.random() < 0.15 or t.username == 'demo':
                     rnt = next((r for r in rentals if r.tenant == t), None)
                     if rnt:
                         s_move_in = t.move_in + timedelta(days=random.randint(10, 30))
@@ -319,8 +326,9 @@ class Command(BaseCommand):
                         sig_id += 1
                         
                 # Parcels
-                if random.random() < 0.4:
-                    for _ in range(random.randint(1, 5)):
+                if random.random() < 0.4 or t.username == 'demo':
+                    num_parcels = random.randint(1, 5) if t.username != 'demo' else random.randint(3, 8)
+                    for _ in range(num_parcels):
                         is_picked_up = random.random() > 0.2
                         parcels.append(Parcel(
                             id=parcel_id,
