@@ -11,6 +11,9 @@ DEBUG = not PRODUCTION_MODE
 
 ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
 
+if os.environ.get("ALLOWED_HOSTS"):
+    ALLOWED_HOSTS.extend([h.strip() for h in os.environ.get("ALLOWED_HOSTS").split(",")])
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -115,6 +118,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
+if os.environ.get("CORS_ALLOWED_ORIGINS"):
+    CORS_ALLOWED_ORIGINS.extend([h.strip() for h in os.environ.get("CORS_ALLOWED_ORIGINS").split(",")])
 CORS_ALLOW_CREDENTIALS = True # Important for cookies/sessions
 
 # --- LDAP Configuration ---
@@ -182,8 +188,10 @@ CSRF_TRUSTED_ORIGINS = [
     "https://smartdormv2.schollheim.net",
     "http://smartdorm.schollheim.net",
     "https://smartdorm.schollheim.net",
-    
 ]
+
+if os.environ.get("CSRF_TRUSTED_ORIGINS"):
+    CSRF_TRUSTED_ORIGINS.extend([h.strip() for h in os.environ.get("CSRF_TRUSTED_ORIGINS").split(",")])
 
 if not LOCAL_ENV:
     SESSION_COOKIE_DOMAIN = ".schollheim.net"
