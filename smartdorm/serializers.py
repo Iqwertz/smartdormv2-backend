@@ -355,9 +355,16 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
 class AttendanceRecordSerializer(serializers.ModelSerializer):
     # To expose some tenant details easily
     tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+    session_date = serializers.DateField(source='session.date', read_only=True)
+    event_name = serializers.CharField(source='session.event.name', read_only=True)
+    event_parts_count = serializers.IntegerField(source='session.event.parts_count', read_only=True)
+    event_required_parts = serializers.IntegerField(source='session.event.required_parts', read_only=True)
     
     class Meta:
         model = AttendanceRecord
-        fields = ['id', 'tenant', 'tenant_name', 'session', 'part', 'timestamp', 'is_manual_override']
+        fields = [
+            'id', 'tenant', 'tenant_name', 'session', 'part', 'timestamp', 'is_manual_override',
+            'session_date', 'event_name', 'event_parts_count', 'event_required_parts'
+        ]
         read_only_fields = ['id', 'timestamp']
 

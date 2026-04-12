@@ -22,6 +22,14 @@ def _is_event_admin(request, event):
         return any(group in user_groups for group in admin_groups)
     return False
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_manageable_events_view(request):
+    events = Event.objects.all().order_by('-created_at')
+    manageable = [event for event in events if _is_event_admin(request, event)]
+    serializer = EventSerializer(manageable, many=True)
+    return Response(serializer.data)
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 def list_create_events_view(request):
@@ -89,6 +97,48 @@ def list_create_sessions_view(request, event_id):
         session = AttendanceSession.objects.create(event=event, status='CREATED', current_part=0)
         serializer = AttendanceSessionSerializer(session)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def toggle_session_status_view(request, session_id):
+    session = get_object_or_404(AttendanceSession, id=session_id)
+    if not _is_event_admin(request, session.event):
+        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+
+    if session.status == 'CREATED':
+        session.status = 'ACTIVE'
+        session.current_part = 1
+        session.secret_token = str(uuid.uuid4())
+        session.last_rotated_at = timezone.now()
+    elif session.status == 'ACTIVE':
+        session.status = 'CLOSED'
+        session.current_part = 0
+        session.secret_token = None
+    elif session.status == 'CLOSED':
+        session.status = 'ACTIVE'
+        session.current_part = session.current_part if session.current_part > 0 else 1
+        session.secret_token = str(uuid.uuid4())
+        session.last_rotated_at = timezone.now()
+
+    session.save()
+    serializer = AttendanceSessionSerializer(session)
+    return Response(serializer.data)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def delete_session_view(request, session_id):
+    session = get_object_or_404(AttendanceSession, id=session_id)
+    if not _is_event_admin(request, session.event):
+        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+
+    if AttendanceRecord.objects.filter(session=session).exists():
+        return Response(
+            {"error": "Session has attendance records. Clear all tracked attendance before deleting this session."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    session.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -196,9 +246,9 @@ def scan_attendance_view(request):
     )
     
     if not created:
-        return Response({"message": "You are already checked in for this part."}, status=status.HTTP_200_OK)
+        return Response({"message": "Du bist bereits für diesen Teil angemeldet."}, status=status.HTTP_200_OK)
         
-    return Response({"message": f"Successfully checked in for part {session.current_part}!"}, status=status.HTTP_201_CREATED)
+    return Response({"message": f"Erfolgreich für Teil {session.current_part} angemeldet!"}, status=status.HTTP_201_CREATED)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -211,15 +261,19 @@ def attendance_report_view(request, session_id):
         return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
         
     records = AttendanceRecord.objects.filter(session=session)
-    active_tenants = get_active_tenants()
+    tenants = Tenant.objects.filter(move_out__gte=timezone.now().date())
     
     # Build the matrix
     # Result format: [{tenant_id: x, tenant_name: "Y Z", parts: [1, 2], manual_overrides: [1]}]
     tenant_records = {}
-    for tenant in active_tenants:
+    for tenant in tenants:
         tenant_records[tenant.id] = {
             "tenant_id": tenant.id,
             "tenant_name": tenant.get_full_name(),
+            "surname": tenant.surname,
+            "name": tenant.name,
+            "current_room": tenant.current_room,
+            "current_floor": tenant.current_floor,
             "parts_attended": [],
             "manual_overrides": []
         }
@@ -234,11 +288,21 @@ def attendance_report_view(request, session_id):
             tenant_records[r.tenant.id] = {
                 "tenant_id": r.tenant.id,
                 "tenant_name": r.tenant.get_full_name(),
+                "surname": r.tenant.surname,
+                "name": r.tenant.name,
+                "current_room": r.tenant.current_room,
+                "current_floor": r.tenant.current_floor,
                 "parts_attended": [r.part],
                 "manual_overrides": [r.part] if r.is_manual_override else []
             }
-            
-    return Response(list(tenant_records.values()))
+
+    rows = list(tenant_records.values())
+    rows.sort(key=lambda row: (row["tenant_name"].lower(), row["tenant_id"]))
+
+    return Response({
+        "session": AttendanceSessionSerializer(session).data,
+        "rows": rows,
+    })
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
