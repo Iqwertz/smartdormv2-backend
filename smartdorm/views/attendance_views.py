@@ -168,10 +168,16 @@ def scan_attendance_view(request):
     if not session_id or not token:
         return Response({"error": "session_id and token are required."}, status=status.HTTP_400_BAD_REQUEST)
         
-    session = get_object_or_404(AttendanceSession, id=session_id)
+    try:
+        session = AttendanceSession.objects.get(id=session_id)
+    except AttendanceSession.DoesNotExist:
+        return Response({"error": "Die gescannte Session existiert nicht."}, status=status.HTTP_404_NOT_FOUND)
     
     # We must map current user to a tenant
-    tenant = get_object_or_404(Tenant, username=request.user.username)
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+    except Tenant.DoesNotExist:
+        return Response({"error": "Dein Benutzerkonto ist mit keinem Mieter verknüpft."}, status=status.HTTP_403_FORBIDDEN)
     
     # Verify the session is active and the token matches
     if session.status != 'ACTIVE' or session.current_part == 0:
@@ -268,7 +274,11 @@ def my_attendance_history_view(request):
     """
     Returns attendance history for the logged-in tenant.
     """
-    tenant = get_object_or_404(Tenant, username=request.user.username)
+    try:
+        tenant = Tenant.objects.get(username=request.user.username)
+    except Tenant.DoesNotExist:
+        return Response([]) # Non-tenant users simply have no history
+        
     records = AttendanceRecord.objects.filter(tenant=tenant).select_related('session__event').order_by('-session__date', 'part')
     
     serializer = AttendanceRecordSerializer(records, many=True)
