@@ -336,3 +336,28 @@ class DepartmentExtensionCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = DepartmentExtension
         fields = ['tenant_id', 'months', 'note']
+from smartdorm.models import Event, AttendanceSession, AttendanceRecord
+
+class EventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Event
+        fields = ['id', 'name', 'parts_count', 'required_parts', 'admin_groups', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+class AttendanceSessionSerializer(serializers.ModelSerializer):
+    event_details = EventSerializer(source='event', read_only=True)
+    
+    class Meta:
+        model = AttendanceSession
+        fields = ['id', 'event', 'event_details', 'date', 'status', 'current_part', 'last_rotated_at']
+        read_only_fields = ['id', 'date', 'last_rotated_at']
+
+class AttendanceRecordSerializer(serializers.ModelSerializer):
+    # To expose some tenant details easily
+    tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+    
+    class Meta:
+        model = AttendanceRecord
+        fields = ['id', 'tenant', 'tenant_name', 'session', 'part', 'timestamp', 'is_manual_override']
+        read_only_fields = ['id', 'timestamp']
+
