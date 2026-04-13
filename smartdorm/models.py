@@ -328,4 +328,77 @@ class GlobalAppSettings(models.Model):
         obj, created = cls.objects.get_or_create(pk=1)
         if created:
             logger.info("Initialized new GlobalAppSettings singleton instance (id=1) with default values.")
+
         return obj
+
+class Event(models.Model):
+    """
+    Represents a generic, recurring event type (e.g., "General Assembly", "Bar Duty").
+    Configured in settings by the Network department.
+    """
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    parts_count = models.IntegerField(default=1, help_text="How many parts one attendance tracking session can have")
+    required_parts = models.IntegerField(default=1, help_text="How many parts are required to count as attended")
+    admin_groups = models.JSONField(default=list, help_text="List of LDAP groups that can manage this event. 'ADMIN' always has permission.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 't_event'
+        managed = True
+
+class AttendanceSession(models.Model):
+    """
+    Represents a single occurrence of an Event on a specific date (e.g., General Assembly on 2026-04-12).
+    """
+    id = models.AutoField(primary_key=True)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='sessions')
+    title = models.CharField(max_length=255, blank=True, default="", help_text="Optional custom session name")
+    date = models.DateField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20, 
+        choices=[('CREATED', 'Created'), ('ACTIVE', 'Active'), ('CLOSED', 'Closed')],
+        default='CREATED'
+    )
+    current_part = models.IntegerField(default=0, help_text="The currently active part (1 to parts_count). 0 means none active.")
+    secret_token = models.CharField(max_length=64, null=True, blank=True)
+    last_rotated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 't_attendance_session'
+        managed = True
+
+class AttendanceRecord(models.Model):
+    """
+    Records a tenant's attendance for a specific part of an AttendanceSession.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='attendance_records')
+    session = models.ForeignKey(AttendanceSession, on_delete=models.CASCADE, related_name='records')
+    part = models.IntegerField(help_text="Which part of the session (e.g., 1, 2, 3) this record applies to")
+    timestamp = models.DateTimeField(auto_now_add=True)
+    is_manual_override = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 't_attendance_record'
+        managed = True
+        unique_together = ('tenant', 'session', 'part')
+
+
+class BaseAttendanceRecord(models.Model):
+    """
+    Records manually added base attendance for a tenant at an event.
+    This allows migration from the old Excel-based attendance system.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='base_attendance_records')
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='base_attendance_records')
+    parts_count = models.IntegerField(help_text="Number of parts to count as attended")
+    note = models.TextField(null=True, blank=True, help_text="Reason for adding base attendance")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_base_attendance_record'
+        managed = True
+        unique_together = ('tenant', 'event')
