@@ -353,6 +353,7 @@ class AttendanceSession(models.Model):
     """
     id = models.AutoField(primary_key=True)
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='sessions')
+    title = models.CharField(max_length=255, blank=True, default="", help_text="Optional custom session name")
     date = models.DateField(auto_now_add=True)
     status = models.CharField(
         max_length=20, 
@@ -382,3 +383,22 @@ class AttendanceRecord(models.Model):
         db_table = 't_attendance_record'
         managed = True
         unique_together = ('tenant', 'session', 'part')
+
+
+class BaseAttendanceRecord(models.Model):
+    """
+    Records manually added base attendance for a tenant at an event.
+    This allows migration from the old Excel-based attendance system.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='base_attendance_records')
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='base_attendance_records')
+    parts_count = models.IntegerField(help_text="Number of parts to count as attended")
+    note = models.TextField(null=True, blank=True, help_text="Reason for adding base attendance")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_base_attendance_record'
+        managed = True
+        unique_together = ('tenant', 'event')

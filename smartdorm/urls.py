@@ -156,6 +156,9 @@ attendance_urlpatterns = [
     path('events/manageable/', attendance_views.list_manageable_events_view, name='attendance-manageable-events'),
     path('events/<int:event_id>/', attendance_views.detail_event_view, name='attendance-event-detail'),
     path('events/<int:event_id>/sessions/', attendance_views.list_create_sessions_view, name='attendance-sessions'),
+    path('events/<int:event_id>/base-attendance/', attendance_views.base_attendance_overview_view, name='attendance-base-overview'),
+    path('events/<int:event_id>/base-attendance/<int:tenant_id>/', attendance_views.tenant_attendance_detail_view, name='attendance-tenant-detail'),
+    path('events/<int:event_id>/base-attendance/<int:tenant_id>/update/', attendance_views.add_or_update_base_attendance_view, name='attendance-add-base'),
     
     path('sessions/<int:session_id>/start/', attendance_views.start_session_part_view, name='attendance-start-session'),
     path('sessions/<int:session_id>/stop/', attendance_views.stop_session_view, name='attendance-stop-session'),

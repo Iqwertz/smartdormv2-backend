@@ -4,12 +4,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
+from django.db.models import Count
 from datetime import timedelta
 import uuid
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Event, AttendanceSession, AttendanceRecord, Tenant, get_active_tenants
-from ..serializers import EventSerializer, AttendanceSessionSerializer, AttendanceRecordSerializer
+from ..models import Event, AttendanceSession, AttendanceRecord, Tenant, get_active_tenants, BaseAttendanceRecord
+from ..serializers import EventSerializer, AttendanceSessionSerializer, AttendanceRecordSerializer, BaseAttendanceRecordSerializer
 
 def _is_event_admin(request, event):
     user_groups = [group.name for group in request.user.groups.all()]
@@ -92,9 +93,14 @@ def list_create_sessions_view(request, event_id):
     elif request.method == 'POST':
         if not _is_event_admin(request, event):
             return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
-            
+
+        raw_title = request.data.get('title', '')
+        title = raw_title.strip() if isinstance(raw_title, str) else ''
+        if not title:
+            title = f"{event.name} - {timezone.now().date().strftime('%d.%m.%Y')}"
+
         # Create a new session for today
-        session = AttendanceSession.objects.create(event=event, status='CREATED', current_part=0)
+        session = AttendanceSession.objects.create(event=event, title=title, status='CREATED', current_part=0)
         serializer = AttendanceSessionSerializer(session)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -203,7 +209,8 @@ def get_current_qr_token_view(request, session_id):
     return Response({
         "token": session.secret_token,
         "part": session.current_part,
-        "session_id": session.id
+        "session_id": session.id,
+        "session_title": session.title,
     })
 
 @api_view(['POST'])
@@ -246,9 +253,15 @@ def scan_attendance_view(request):
     )
     
     if not created:
-        return Response({"message": "Du bist bereits für diesen Teil angemeldet."}, status=status.HTTP_200_OK)
+        return Response(
+            {"message": f"Du bist bereits für {session.title or 'diese Session'} Teil {session.current_part} angemeldet.", "session_title": session.title},
+            status=status.HTTP_200_OK,
+        )
         
-    return Response({"message": f"Erfolgreich für Teil {session.current_part} angemeldet!"}, status=status.HTTP_201_CREATED)
+    return Response(
+        {"message": f"Erfolgreich für {session.title or 'die Session'} Teil {session.current_part} angemeldet!", "session_title": session.title},
+        status=status.HTTP_201_CREATED,
+    )
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -347,4 +360,170 @@ def my_attendance_history_view(request):
     
     serializer = AttendanceRecordSerializer(records, many=True)
     return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def base_attendance_overview_view(request, event_id):
+    """
+    Returns a list of all active tenants with their attendance summary for a specific event.
+    A session counts as attended if the tenant has at least event.required_parts
+    distinct parts logged in that session.
+    """
+    event = get_object_or_404(Event, id=event_id)
+    if not _is_event_admin(request, event):
+        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+    
+    active_tenants = get_active_tenants()
+    required_parts_threshold = max(1, event.required_parts)
+    
+    tenant_summaries = []
+    for tenant in active_tenants:
+        # Count sessions where enough parts were logged for this tenant
+        attended_sessions_count = AttendanceRecord.objects.filter(
+            tenant=tenant,
+            session__event=event
+        ).values('session_id').annotate(
+            parts_logged=Count('part', distinct=True)
+        ).filter(
+            parts_logged__gte=required_parts_threshold
+        ).count()
+        
+        # Get base attendance for this tenant and event
+        base_attendance = BaseAttendanceRecord.objects.filter(
+            tenant=tenant,
+            event=event
+        ).first()
+        base_attendance_count = base_attendance.parts_count if base_attendance else 0
+        
+        total_attendance = attended_sessions_count + base_attendance_count
+        
+        tenant_summaries.append({
+            'tenant_id': tenant.id,
+            'name': tenant.name,
+            'surname': tenant.surname,
+            'current_room': tenant.current_room,
+            'current_floor': tenant.current_floor,
+            'attended_sessions_count': attended_sessions_count,
+            'required_parts_threshold': required_parts_threshold,
+            'base_attendance_count': base_attendance_count,
+            'total_attendance_count': total_attendance,
+        })
+    
+    # Sort by surname, then name
+    tenant_summaries.sort(key=lambda x: (x['surname'].lower(), x['name'].lower()))
+    
+    return Response(tenant_summaries)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def tenant_attendance_detail_view(request, event_id, tenant_id):
+    """
+    Returns detailed attendance information for a specific tenant in a specific event.
+    Sessions are grouped (not split into one row per part).
+    """
+    event = get_object_or_404(Event, id=event_id)
+    if not _is_event_admin(request, event):
+        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+    
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # Get all attendance records for this tenant in this event
+    scanned_records = AttendanceRecord.objects.filter(
+        tenant=tenant,
+        session__event=event
+    ).select_related('session').order_by('-session__date', 'part')
+    
+    # Get base attendance record if it exists
+    base_attendance = BaseAttendanceRecord.objects.filter(
+        tenant=tenant,
+        event=event
+    ).first()
+    
+    grouped_sessions = {}
+    for record in scanned_records:
+        session_id = record.session.id
+        if session_id not in grouped_sessions:
+            grouped_sessions[session_id] = {
+                'session_id': session_id,
+                'session_title': record.session.title or f"Session {session_id}",
+                'session_date': record.session.date,
+                'parts_attended': [],
+                'has_manual_override': False,
+                'latest_timestamp': record.timestamp,
+            }
+
+        grouped_sessions[session_id]['parts_attended'].append(record.part)
+        if record.is_manual_override:
+            grouped_sessions[session_id]['has_manual_override'] = True
+        if record.timestamp > grouped_sessions[session_id]['latest_timestamp']:
+            grouped_sessions[session_id]['latest_timestamp'] = record.timestamp
+
+    scanned_sessions = list(grouped_sessions.values())
+    scanned_sessions.sort(
+        key=lambda s: (s['session_date'], s['session_id']),
+        reverse=True,
+    )
+    
+    return Response({
+        'tenant_id': tenant.id,
+        'tenant_name': f"{tenant.name} {tenant.surname}",
+        'current_room': tenant.current_room,
+        'current_floor': tenant.current_floor,
+        'scanned_sessions': scanned_sessions,
+        'base_attendance': {
+            'id': base_attendance.id if base_attendance else None,
+            'parts_count': base_attendance.parts_count if base_attendance else 0,
+            'note': base_attendance.note if base_attendance else None,
+            'created_at': base_attendance.created_at if base_attendance else None,
+            'updated_at': base_attendance.updated_at if base_attendance else None,
+        }
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def add_or_update_base_attendance_view(request, event_id, tenant_id):
+    """
+    Create or update base attendance for a tenant in a specific event.
+    Request body: {parts_count: int, note: str (optional)}
+    """
+    event = get_object_or_404(Event, id=event_id)
+    if not _is_event_admin(request, event):
+        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+    
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    parts_count = request.data.get('parts_count')
+    note = request.data.get('note', '')
+    
+    if parts_count is None:
+        return Response({"error": "parts_count is required."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        parts_count = int(parts_count)
+        if parts_count < 0:
+            raise ValueError("parts_count must be non-negative")
+    except (ValueError, TypeError):
+        return Response({"error": "parts_count must be a non-negative integer."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    if parts_count == 0:
+        # Delete base attendance record if it exists
+        BaseAttendanceRecord.objects.filter(tenant=tenant, event=event).delete()
+        return Response({"message": "Base attendance removed."}, status=status.HTTP_204_NO_CONTENT)
+    
+    # Create or update
+    base_attendance, created = BaseAttendanceRecord.objects.update_or_create(
+        tenant=tenant,
+        event=event,
+        defaults={
+            'parts_count': parts_count,
+            'note': note if note else None,
+        }
+    )
+    
+    serializer = BaseAttendanceRecordSerializer(base_attendance)
+    return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
 

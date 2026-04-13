@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord
 from django.utils import timezone
 from django.urls import reverse
 import base64
@@ -349,13 +349,14 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = AttendanceSession
-        fields = ['id', 'event', 'event_details', 'date', 'status', 'current_part', 'last_rotated_at']
+        fields = ['id', 'event', 'event_details', 'title', 'date', 'status', 'current_part', 'last_rotated_at']
         read_only_fields = ['id', 'date', 'last_rotated_at']
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):
     # To expose some tenant details easily
     tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
     session_date = serializers.DateField(source='session.date', read_only=True)
+    session_title = serializers.CharField(source='session.title', read_only=True)
     event_name = serializers.CharField(source='session.event.name', read_only=True)
     event_parts_count = serializers.IntegerField(source='session.event.parts_count', read_only=True)
     event_required_parts = serializers.IntegerField(source='session.event.required_parts', read_only=True)
@@ -364,7 +365,18 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         model = AttendanceRecord
         fields = [
             'id', 'tenant', 'tenant_name', 'session', 'part', 'timestamp', 'is_manual_override',
-            'session_date', 'event_name', 'event_parts_count', 'event_required_parts'
+            'session_date', 'session_title', 'event_name', 'event_parts_count', 'event_required_parts'
         ]
         read_only_fields = ['id', 'timestamp']
+
+
+class BaseAttendanceRecordSerializer(serializers.ModelSerializer):
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+    
+    class Meta:
+        model = BaseAttendanceRecord
+        fields = ['id', 'tenant', 'tenant_name', 'event', 'event_name', 'parts_count', 'note', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
 
