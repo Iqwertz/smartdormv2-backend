@@ -8,6 +8,7 @@ from .views import (
     engagement_views,
     parcel_views,
     shared_views,
+    attendance_views,
 )
 
 # Auth-related URLs
@@ -98,6 +99,7 @@ departure_management_urlpatterns = [
     path('list/', department_views.list_departures_view, name='departure-list'),
     path('<int:departure_id>/remind/', department_views.send_departure_reminder_view, name='departure-remind'),
     path('<int:departure_id>/close/', department_views.close_departure_view, name='departure-close'),
+    path('<int:departure_id>/revert/', department_views.revert_departure_view, name='departure-revert'),
     path('<int:departure_id>/download-pdf/', department_views.download_departure_pdf_view, name='departure-download-pdf'),
 ]
 
@@ -149,6 +151,28 @@ common_urlpatterns = [
     path('departments-for-select/', shared_views.departments_for_select_view, name='common-departments-for-select'),
 ]
 
+# Attendance URLs
+attendance_urlpatterns = [
+    path('events/', attendance_views.list_create_events_view, name='attendance-events'),
+    path('events/manageable/', attendance_views.list_manageable_events_view, name='attendance-manageable-events'),
+    path('events/<int:event_id>/', attendance_views.detail_event_view, name='attendance-event-detail'),
+    path('events/<int:event_id>/sessions/', attendance_views.list_create_sessions_view, name='attendance-sessions'),
+    path('events/<int:event_id>/base-attendance/', attendance_views.base_attendance_overview_view, name='attendance-base-overview'),
+    path('events/<int:event_id>/base-attendance/<int:tenant_id>/', attendance_views.tenant_attendance_detail_view, name='attendance-tenant-detail'),
+    path('events/<int:event_id>/base-attendance/<int:tenant_id>/update/', attendance_views.add_or_update_base_attendance_view, name='attendance-add-base'),
+    
+    path('sessions/<int:session_id>/start/', attendance_views.start_session_part_view, name='attendance-start-session'),
+    path('sessions/<int:session_id>/stop/', attendance_views.stop_session_view, name='attendance-stop-session'),
+    path('sessions/<int:session_id>/toggle-status/', attendance_views.toggle_session_status_view, name='attendance-toggle-session-status'),
+    path('sessions/<int:session_id>/delete/', attendance_views.delete_session_view, name='attendance-delete-session'),
+    path('sessions/<int:session_id>/current-token/', attendance_views.get_current_qr_token_view, name='attendance-current-token'),
+    path('sessions/<int:session_id>/report/', attendance_views.attendance_report_view, name='attendance-report'),
+    path('sessions/<int:session_id>/override/', attendance_views.manual_override_view, name='attendance-override'),
+    
+    path('scan/', attendance_views.scan_attendance_view, name='attendance-scan'),
+    path('my-history/', attendance_views.my_attendance_history_view, name='attendance-my-history'),
+]
+
 urlpatterns = [
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
@@ -156,4 +180,5 @@ urlpatterns = [
     path('api/engagements/', include((engagement_urlpatterns, 'engagements'))),
     path('api/department/', include((department_urlpatterns, 'department'))),
     path('api/common/', include((common_urlpatterns, 'common'))),
+    path('api/attendance/', include((attendance_urlpatterns, 'attendance'))),
 ]

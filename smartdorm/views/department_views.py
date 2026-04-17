@@ -867,6 +867,24 @@ def send_departure_reminder_view(request, departure_id):
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 @transaction.atomic
+def revert_departure_view(request, departure_id):
+    revert_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    revert_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
+    
+    tenant = departure.tenant
+    
+    DepositBank.objects.filter(tenant=tenant).delete()
+    departure.delete()
+
+    return Response({"message": "Auszug erfolgreich abgebrochen."}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
 def close_departure_view(request, departure_id):
     close_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     close_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE

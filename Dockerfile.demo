@@ -1,0 +1,34 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libpq-dev gcc python3-dev libldap2-dev libsasl2-dev \
+    ldap-utils netcat-traditional \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir gunicorn Faker pytest
+
+COPY . .
+RUN mkdir -p /app/logs
+
+# We patch the models inside the container to make them managed,
+# and remove old migrations so we get a fresh correct schema for the demo DB.
+RUN sed -i 's/managed = False//g' smartdorm/models.py
+RUN rm -f smartdorm/migrations/00*.py
+
+# Make entrypoint executable
+RUN chmod +x scripts/demo-entrypoint.sh
+
+
+# Overwrite settings for the demo environment to allow CORS from the demo URL
+RUN echo "CORS_ALLOW_ALL_ORIGINS = True" >> smartdorm/settings.py
+RUN echo "CSRF_TRUSTED_ORIGINS = ['http://smartdorm.juliushussl.at', 'https://smartdorm.juliushussl.at', 'https://smartdorm-api.juliushussl.at']" >> smartdorm/settings.py
+RUN echo "CSRF_COOKIE_DOMAIN = '.juliushussl.at'" >> smartdorm/settings.py
+RUN echo "SESSION_COOKIE_DOMAIN = '.juliushussl.at'" >> smartdorm/settings.py
+RUN echo "ALLOWED_HOSTS += ['smartdorm.juliushussl.at', 'smartdorm-api.juliushussl.at']" >> smartdorm/settings.py
+RUN echo "SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')" >> smartdorm/settings.py
+CMD ["scripts/demo-entrypoint.sh"]

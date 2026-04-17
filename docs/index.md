@@ -21,5 +21,6 @@ To get a full understanding of the system, please read through the following sec
 2.  [**Tenant Lifecycle**](./tenant_lifecycle.md): Explains the complete journey of a tenant, from moving in, requesting an extension, to the final move-out process.
 3.  [**Engagement Management**](./engagement_management.md): Details how tenants apply for and are assigned to student-run departments ("Referate"), and how the critical semester changeover process works.
 4.  [**Authentication & Permissions**](./authentication_permissions.md): Describes how users are authenticated against LDAP and how access to different API endpoints is controlled.
-5.  [**API Endpoint Overview**](./api_endpoints.md): A high-level summary of the available API endpoints and their purpose.
-6.  [**Other Features**](./other_features.md): Documentation for other key functionalities like Parcel and Subtenant management.
+5.  [**Attendance Tracking**](./attendance_tracking.md): Documentation covering the architecture and implementation of the generic QR-code based attendance tracking system.
+6.  [**API Endpoint Overview**](./api_endpoints.md): A high-level summary of the available API endpoints and their purpose.
+7.  [**Other Features**](./other_features.md): Documentation for other key functionalities like Parcel and Subtenant management.

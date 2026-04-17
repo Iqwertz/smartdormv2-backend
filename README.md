@@ -48,6 +48,12 @@ sudo systemctl enable redis-server
 1. Run server: `./run-server.sh`
 2. Run tests: `./run-tests.sh`
 
+## Demo Environment (Docker)
+
+To demonstrate the system to external people, a fully self-contained Docker environment is available. It creates a mock PostgreSQL database, mock Redis, a mock custom OpenLDAP server, and automatically seeds comprehensive realistic fake data without touching production configurations.
+
+Please view [docs/demo.md](docs/demo.md) for detailed instructions on starting and using the demo environment.
+
 ## Tenant API Demo
 
 Run `scripts/tenant_api_demo.py` script using:
