@@ -362,6 +362,7 @@ class AttendanceSession(models.Model):
     )
     current_part = models.IntegerField(default=0, help_text="The currently active part (1 to parts_count). 0 means none active.")
     secret_token = models.CharField(max_length=64, null=True, blank=True)
+    previous_secret_token = models.CharField(max_length=64, null=True, blank=True)
     last_rotated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

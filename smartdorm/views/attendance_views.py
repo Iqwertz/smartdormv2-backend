@@ -199,9 +199,10 @@ def get_current_qr_token_view(request, session_id):
     if session.status != 'ACTIVE' or session.current_part == 0:
         return Response({"error": "Session is not active."}, status=status.HTTP_400_BAD_REQUEST)
         
-    # Rotate token if older than 60 seconds
+    # Rotate token if older than 30 seconds
     now = timezone.now()
-    if not session.last_rotated_at or now - session.last_rotated_at > timedelta(seconds=60):
+    if not session.last_rotated_at or now - session.last_rotated_at > timedelta(seconds=30):
+        session.previous_secret_token = session.secret_token
         session.secret_token = str(uuid.uuid4())
         session.last_rotated_at = now
         session.save()
@@ -240,8 +241,13 @@ def scan_attendance_view(request):
     if session.status != 'ACTIVE' or session.current_part == 0:
         return Response({"error": "Attendance session is currently closed."}, status=status.HTTP_400_BAD_REQUEST)
         
-    # Check if the token is valid (including a small buffer for rotation, normally just equality)
-    if session.secret_token != token:
+    # Accept current token, or previous token if within a 15-second grace period
+    now = timezone.now()
+    grace_period_active = session.last_rotated_at and (now - session.last_rotated_at).total_seconds() < 15
+    
+    is_valid_token = (session.secret_token == token) or (grace_period_active and session.previous_secret_token == token)
+    
+    if not is_valid_token:
         return Response({"error": "Invalid or expired QR code. Please scan again."}, status=status.HTTP_400_BAD_REQUEST)
         
     # Has the tenant already scanned this part?
