@@ -210,10 +210,6 @@ class ParcelCreateRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Either 'room' or both 'name' and 'surname' must be provided."
             )
-        if room and (name or surname):
-            raise serializers.ValidationError(
-                "Provide 'room' OR ('name' and 'surname'), not both."
-            )
         return data
 
 class ParcelSerializer(serializers.ModelSerializer):
