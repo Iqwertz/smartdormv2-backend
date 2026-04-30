@@ -23,6 +23,26 @@ def _is_event_admin(request, event):
         return any(group in user_groups for group in admin_groups)
     return False
 
+
+def _build_attendance_code(session):
+    return f"{session.id}_{session.secret_token}"
+
+
+def _parse_attendance_code(code):
+    if not code or not isinstance(code, str):
+        return None
+
+    session_id_text, separator, token = code.partition('_')
+    if not separator or not session_id_text or not token:
+        return None
+
+    try:
+        session_id = int(session_id_text)
+    except ValueError:
+        return None
+
+    return session_id, token
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 def list_manageable_events_view(request):
@@ -208,7 +228,7 @@ def get_current_qr_token_view(request, session_id):
         session.save()
         
     return Response({
-        "token": session.secret_token,
+        "code": _build_attendance_code(session),
         "part": session.current_part,
         "session_id": session.id,
         "session_title": session.title,
@@ -220,12 +240,14 @@ def scan_attendance_view(request):
     """
     Tenant endpoint to submit a scanned QR code.
     """
-    session_id = request.data.get('session_id')
-    token = request.data.get('token')
-    
-    if not session_id or not token:
-        return Response({"error": "session_id and token are required."}, status=status.HTTP_400_BAD_REQUEST)
-        
+    code = request.data.get('code')
+
+    parsed_code = _parse_attendance_code(code)
+    if not parsed_code:
+        return Response({"error": "code is required and must be formatted as sessionId_token."}, status=status.HTTP_400_BAD_REQUEST)
+
+    session_id, token = parsed_code
+
     try:
         session = AttendanceSession.objects.get(id=session_id)
     except AttendanceSession.DoesNotExist:
@@ -248,7 +270,7 @@ def scan_attendance_view(request):
     is_valid_token = (session.secret_token == token) or (grace_period_active and session.previous_secret_token == token)
     
     if not is_valid_token:
-        return Response({"error": "Invalid or expired QR code. Please scan again."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Invalid or expired QR code"}, status=status.HTTP_400_BAD_REQUEST)
         
     # Has the tenant already scanned this part?
     record, created = AttendanceRecord.objects.get_or_create(
