@@ -8,10 +8,12 @@ The goal of this feature is to replace manual roll calls and paper sign-in sheet
 
 **Key Requirements:**
 1. **Generic Event Support:** The system must support diverse events with custom names, configurable parts (e.g., an event split into multiple sessions), and definable attendance requirements.
-2. **In-App Native Scanner:** To prevent cheating (such as sending a static QR code screenshot to a friend), attendees must scan the QR code from within the authenticated SmartDorm frontend application.
-3. **Rotating QR Codes:** The QR code projected on the wall must rotate continuously (e.g., new token every 60 seconds) to ensure physical presence at the event.
-4. **Dynamic Authorization:** Different events can be managed by different administrative bodies. The system must restrict event management to specific LDAP groups (e.g., Heimrat, Organizers).
-5. **Manual Management & Overrides:** Organizers must be able to manually open and close physical sessions. They also need a matrix/report view to manually tick or untick attendance for specific tenants if the scanner fails, a phone battery dies, or an exemption is granted.
+2. **Link-based QR Flow:** The projector QR opens SmartDorm in the browser with a single attendance code in the URL. The code is composed as `sessionId_token`.
+3. **Optional Browser Check-in:** When enabled, the browser can register attendance directly after login. When disabled, only the in-app scanner can submit attendance.
+4. **In-App Native Scanner:** To prevent cheating, attendees may still scan the QR code from within the authenticated SmartDorm frontend application.
+5. **Rotating QR Codes:** The QR code projected on the wall must rotate continuously (e.g., new token every 60 seconds) to ensure physical presence at the event.
+6. **Dynamic Authorization:** Different events can be managed by different administrative bodies. The system must restrict event management to specific LDAP groups (e.g., Heimrat, Organizers).
+7. **Manual Management & Overrides:** Organizers must be able to manually open and close physical sessions. They also need a matrix/report view to manually tick or untick attendance for specific tenants if the scanner fails, a phone battery dies, or an exemption is granted.
 
 ## Database Schema
 
@@ -50,15 +52,15 @@ The endpoints utilize a customized `GroupAndEmployeeTypePermission` architecture
 
 ### QR Token Rotation
 When a session is marked `is_active`, the frontend projector periodically polls the `/api/attendance/sessions/<id>/qr_token/` endpoint. 
-If the current time exceeds `token_expires_at`, the backend generates a fresh UUID `current_token`, updates the expiry to `now() + 60 seconds`, saves the session, and returns the new token. 
+If the current time exceeds `token_expires_at`, the backend generates a fresh UUID `current_token`, updates the expiry to `now() + 60 seconds`, saves the session, and returns the new composite attendance code as `sessionId_token`.
 
-### Native Scan Endpoint (`/api/attendance/scan/`)
-*   **Input**: The UUID token decoded from the QR code.
-*   **Validation**: 
-    1. Looks up the active `AttendanceSession` holding that token.
-    2. Verifies `token_expires_at` is still in the future.
-    3. Finds the `Tenant` record matching the `request.user`.
-*   **Handling Non-Tenants**: Pure admin users (who do not have a physical `Tenant` record) testing the scanner are caught gracefully via `try...except Tenant.DoesNotExist` and returned a `403 Forbidden` with a user-friendly JSON message, preventing `HTTP 404` crashes.
+### Check-in Endpoint (`/api/attendance/scan/`)
+*   **Input**: A single `code` value formatted as `sessionId_token`.
+*   **Validation**:
+    1. Splits the session id from the token.
+    2. Loads the matching `AttendanceSession` by id.
+    3. Verifies the session is active and the token matches the current or recent previous token.
+    4. Finds the `Tenant` record matching the `request.user`.
 *   **Success**: Creates an `AttendanceRecord` for the tenant.
 
 ### Manual Override Endpoint (`/api/attendance/manual_override/`)
@@ -70,11 +72,12 @@ The user interfaces are implemented in the React application (`smartdormv2-front
 
 ### Admin Experience
 *   **`EventManagementPage.tsx`**: A CRUD interface for creating generic events, configuring required parts, and assigning administrative LDAP groups.
-*   **`ActiveSessionDisplayPage.tsx`**: The "Projector View". This page hides standard navigation, maximizes the QR code (rendered via `qrcode.react`), and polls the backend every 10 seconds to fetch and display the rotating token seamlessly.
+*   **`ActiveSessionDisplayPage.tsx`**: The "Projector View". This page hides standard navigation, maximizes the QR code (rendered via `qrcode.react`), and polls the backend every 10 seconds to fetch and display the rotating attendance link seamlessly.
 *   **`AttendanceReportPage.tsx`**: A comprehensive data grid or matrix displaying all tenants globally against the current session. Admins can view scan timestamps and use toggle switches to invoke the `manual_override` API endpoint.
 
 ### Tenant Experience
-*   **`AttendanceScannerPage.tsx`**: The mobile-first scanner interface utilizing `html5-qrcode`. It directly hooks into the device camera, interprets the UUID payload, and posts to the backend check-in endpoint.
+*   **`AttendanceScannerPage.tsx`**: The mobile-first scanner interface utilizing `html5-qrcode`. It directly hooks into the device camera, parses the attendance link, extracts the composite code, and posts to the backend check-in endpoint.
+*   **Browser check-in page**: When a QR link is opened in the browser, SmartDorm stores the code until login is available and then submits attendance automatically, if link check-in is enabled.
 *   **`TenantPage.tsx` (`AttendanceHistoryCard.tsx`)**: Residents can review their own attendance history directly on their profile dashboard, seeing which events they satisfied and which ones they missed.
 
 ## Future Enhancements
