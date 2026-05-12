@@ -90,11 +90,18 @@ def get_tenant_detail_view(request, tenant_id):
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
 def update_tenant_view(request, tenant_id):
     update_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     update_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # Store old values to detect changes
+    old_email = tenant.email
+    old_name = tenant.name
+    old_surname = tenant.surname
+    
     # Exclude non-editable fields from the request data before validation
     request.data.pop('current_room', None)
     request.data.pop('move_in', None)
@@ -102,6 +109,36 @@ def update_tenant_view(request, tenant_id):
     serializer = TenantSerializer(tenant, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
+        
+        # Check if email, name, or surname changed and update LDAP
+        if tenant.username and (
+            tenant.email != old_email or 
+            tenant.name != old_name or 
+            tenant.surname != old_surname
+        ):
+            try:
+                name_changed = tenant.name != old_name
+                surname_changed = tenant.surname != old_surname
+                
+                ldap_utils.update_ldap_user_attributes(
+                    username=tenant.username,
+                    email=tenant.email if tenant.email != old_email else None,
+                    first_name=tenant.name if name_changed else None,
+                    last_name=tenant.surname if surname_changed else None
+                )
+                logger.info(f"Successfully updated LDAP attributes for tenant '{tenant.username}'")
+            except (ValueError, ConnectionError) as e:
+                logger.error(f"Failed to update LDAP for tenant '{tenant.username}': {e}", exc_info=True)
+                # Log warning but don't fail the entire operation - DB was successfully updated
+                return Response(
+                    {
+                        "message": "Tenant updated successfully, but LDAP sync failed. Manual synchronization may be needed.",
+                        "data": serializer.data,
+                        "ldap_error": str(e)
+                    },
+                    status=status.HTTP_200_OK
+                )
+        
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

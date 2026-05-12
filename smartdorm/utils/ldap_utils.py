@@ -318,6 +318,65 @@ def find_ldap_user_by_email(email):
         if 'con' in locals() and con:
             con.unbind_s()
             
+def update_ldap_user_attributes(username, email=None, first_name=None, last_name=None):
+    """
+    Updates LDAP user attributes (email, first name, last name).
+    Only updates attributes that are provided (not None).
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        mod_list = []
+
+        if email is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'mail', [email.encode('utf-8')]))
+
+        if first_name is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'givenName', [first_name.encode('utf-8')]))
+
+        if last_name is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'sn', [last_name.encode('utf-8')]))
+
+        # Update displayName if either first_name or last_name is provided
+        if first_name is not None or last_name is not None:
+            # Need to fetch current values if only one is provided
+            if first_name is None or last_name is None:
+                result = con.search_s(user_dn, ldap.SCOPE_BASE, attrlist=['givenName', 'sn'])
+                dn, attrs = result[0]
+                if first_name is None:
+                    first_name = attrs.get('givenName', [b''])[0].decode('utf-8')
+                if last_name is None:
+                    last_name = attrs.get('sn', [b''])[0].decode('utf-8')
+
+            display_name = f"{first_name} {last_name}".strip()
+            mod_list.append((ldap.MOD_REPLACE, 'displayName', [display_name.encode('utf-8')]))
+
+        if mod_list:
+            con.modify_s(user_dn, mod_list)
+            logger.info(f"Successfully updated LDAP attributes for user '{username}'")
+            return True
+        else:
+            logger.info(f"No attributes to update for user '{username}'")
+            return True
+
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to update LDAP user: User '{username}' does not exist.")
+        raise ValueError(f"User '{username}' does not exist in LDAP.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during attribute update for '{username}': {e}")
+        raise ConnectionError(f"Could not update LDAP attributes: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
 def ldap_username_exists(username):
     """
     Checks if a username exists in the LDAP directory.
