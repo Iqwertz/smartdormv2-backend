@@ -390,11 +390,14 @@ class BaseAttendanceRecord(models.Model):
     """
     Records manually added base attendance for a tenant at an event.
     This allows migration from the old Excel-based attendance system.
+    
+    Note: The 'parts_count' field stores the number of SESSIONS attended in the old system,
+    not the number of parts within a session.
     """
     id = models.AutoField(primary_key=True)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='base_attendance_records')
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='base_attendance_records')
-    parts_count = models.IntegerField(help_text="Number of parts to count as attended")
+    parts_count = models.IntegerField(help_text="Number of sessions attended in the old system (stored as 'parts_count' for database compatibility)")
     note = models.TextField(null=True, blank=True, help_text="Reason for adding base attendance")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
