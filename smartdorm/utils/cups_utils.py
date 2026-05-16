@@ -18,10 +18,36 @@ except ImportError:
     logger.warning("pycups not installed. CUPS functionality will be limited.")
 
 
-def get_cups_connection() -> Optional[Any]:
+def resolve_cups_host(device=None) -> Optional[str]:
+    """
+    Resolves the CUPS server host (IP or hostname) for a given device.
+
+    Resolution order:
+        1. device.ip_address (from DB, preferred)
+        2. settings.CUPS_SERVER (legacy env-based fallback)
+
+    Args:
+        device: Optional Device model instance.
+
+    Returns:
+        Host string (IP or hostname) or None if nothing configured.
+    """
+    if device is not None:
+        device_ip = getattr(device, 'ip_address', '') or ''
+        if device_ip.strip():
+            return device_ip.strip()
+    return getattr(settings, 'CUPS_SERVER', None)
+
+
+def get_cups_connection(device=None) -> Optional[Any]:
     """
     Creates a CUPS connection to the configured CUPS server.
-    
+
+    Args:
+        device: Optional Device model instance. If provided and has an
+                ip_address, that is used as the CUPS host. Otherwise the
+                CUPS_SERVER setting is used as fallback.
+
     Returns:
         cups.Connection or None if connection fails
     """
@@ -30,9 +56,12 @@ def get_cups_connection() -> Optional[Any]:
         return None
     
     try:
-        cups_server = getattr(settings, 'CUPS_SERVER', None)
+        cups_server = resolve_cups_host(device)
         if not cups_server:
-            logger.error("CUPS_SERVER not configured in settings")
+            logger.error(
+                "No CUPS host configured. Set Device.ip_address via admin UI "
+                "or fall back to CUPS_SERVER env var."
+            )
             return None
         
         # pycups can use either IP address or hostname
@@ -44,18 +73,19 @@ def get_cups_connection() -> Optional[Any]:
         return None
 
 
-def get_printer_options(printer_name: str) -> Optional[Dict[str, Any]]:
+def get_printer_options(printer_name: str, device=None) -> Optional[Dict[str, Any]]:
     """
     Gets available options for a printer.
     Useful for debugging which color mode options are supported.
-    
+
     Args:
         printer_name: Name of the printer in CUPS
-        
+        device: Optional Device model instance (used to resolve the CUPS host).
+
     Returns:
         Dictionary with printer options or None if failed
     """
-    conn = get_cups_connection()
+    conn = get_cups_connection(device)
     if not conn:
         return None
     
@@ -73,11 +103,12 @@ def get_printer_options(printer_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def submit_print_job(printer_name: str, file_data: bytes, filename: str, 
-                     title: Optional[str] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]:
+def submit_print_job(printer_name: str, file_data: bytes, filename: str,
+                     title: Optional[str] = None, options: Optional[Dict[str, Any]] = None,
+                     device=None) -> Optional[str]:
     """
     Submits a print job to CUPS.
-    
+
     Args:
         printer_name: Name of the printer in CUPS (e.g. "Samsung_C1860_Series")
         file_data: PDF data as bytes
@@ -87,11 +118,12 @@ def submit_print_job(printer_name: str, file_data: bytes, filename: str,
                  - ColorModel: "Gray" for black & white, "Color" or "CMYK" for color
                  - copies: Number of copies (string)
                  - page-ranges: Page range (e.g. "1-5" for pages 1 to 5)
-        
+        device: Optional Device model instance (used to resolve the CUPS host).
+
     Returns:
         CUPS Job ID as string, or None if failed
     """
-    conn = get_cups_connection()
+    conn = get_cups_connection(device)
     if not conn:
         return None
     
@@ -134,14 +166,15 @@ def submit_print_job(printer_name: str, file_data: bytes, filename: str,
         return None
 
 
-def get_job_status(printer_name: str, job_id: str) -> Optional[Dict[str, Any]]:
+def get_job_status(printer_name: str, job_id: str, device=None) -> Optional[Dict[str, Any]]:
     """
     Retrieves the status of a CUPS print job.
-    
+
     Args:
         printer_name: Name of the printer
         job_id: CUPS Job ID
-        
+        device: Optional Device model instance (used to resolve the CUPS host).
+
     Returns:
         Dictionary with job information or None
         {
@@ -151,7 +184,7 @@ def get_job_status(printer_name: str, job_id: str) -> Optional[Dict[str, Any]]:
             'pages': int (number of printed pages)
         }
     """
-    conn = get_cups_connection()
+    conn = get_cups_connection(device)
     if not conn:
         return None
     
@@ -397,17 +430,18 @@ def is_job_failed(job_state: int, job_state_reasons) -> bool:
     return False
 
 
-def get_printer_info(printer_name: str) -> Optional[Dict[str, Any]]:
+def get_printer_info(printer_name: str, device=None) -> Optional[Dict[str, Any]]:
     """
     Retrieves information about a printer.
-    
+
     Args:
         printer_name: Name of the printer in CUPS
-        
+        device: Optional Device model instance (used to resolve the CUPS host).
+
     Returns:
         Dictionary with printer information or None
     """
-    conn = get_cups_connection()
+    conn = get_cups_connection(device)
     if not conn:
         return None
     
@@ -430,18 +464,19 @@ def get_printer_info(printer_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def cancel_job(printer_name: str, job_id: str) -> bool:
+def cancel_job(printer_name: str, job_id: str, device=None) -> bool:
     """
     Cancels a print job.
-    
+
     Args:
         printer_name: Name of the printer
         job_id: CUPS Job ID
-        
+        device: Optional Device model instance (used to resolve the CUPS host).
+
     Returns:
         True if successful, False otherwise
     """
-    conn = get_cups_connection()
+    conn = get_cups_connection(device)
     if not conn:
         return False
     

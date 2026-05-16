@@ -431,6 +431,12 @@ class Device(models.Model):
     price_per_page_gray = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.05'), help_text="Price per black & white page in Euro")
     max_session_duration_minutes = models.IntegerField(default=30, help_text="Maximum session duration in minutes")
     cups_printer_name = models.CharField(max_length=255, help_text="Name of the printer in CUPS (e.g. Samsung_C1860_Series)")
+    ip_address = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="IP address or hostname of the Raspberry Pi running CUPS and the scan service (e.g. 10.50.0.15). Falls back to CUPS_SERVER setting when empty.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

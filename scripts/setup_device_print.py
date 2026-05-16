@@ -22,6 +22,9 @@ CUPS_PRINTER_NAME = "Samsung_C1860_Series"
 PRICE_COLOR = "0.10"
 PRICE_GRAY = "0.05"
 MAX_SESSION_MINUTES = 30
+# Leave empty to fall back to CUPS_SERVER env var; otherwise set the Pi's IP
+# explicitly so the device is ready to print without admin interaction.
+IP_ADDRESS = ""
 
 
 def load_env():
@@ -75,8 +78,13 @@ def main():
         price_per_page_gray=Decimal(PRICE_GRAY),
         max_session_duration_minutes=MAX_SESSION_MINUTES,
         cups_printer_name=CUPS_PRINTER_NAME,
+        ip_address=IP_ADDRESS,
     )
-    print(f"Device created: id={device.id}, name={device.name}, cups={device.cups_printer_name}")
+    ip_display = device.ip_address or "(empty, falls back to CUPS_SERVER env)"
+    print(
+        f"Device created: id={device.id}, name={device.name}, "
+        f"cups={device.cups_printer_name}, ip={ip_display}"
+    )
 
 
 if __name__ == "__main__":

@@ -368,7 +368,7 @@ def session_detail_view(request, session_id):
         
         for job in active_jobs:
             if job.device and job.device.cups_printer_name and job.cups_job_id:
-                job_status = get_job_status(job.device.cups_printer_name, job.cups_job_id)
+                job_status = get_job_status(job.device.cups_printer_name, job.cups_job_id, device=job.device)
                 if job_status:
                     logger.debug(f"Job {job.cups_job_id} status: state={job_status.get('job_state')}, reasons={job_status.get('job_state_reasons')}")
                     if is_job_completed(job_status['job_state']):
@@ -624,7 +624,8 @@ def print_job_view(request, session_id):
             file_data=file_data,
             filename=filename,
             title=f"SmartDorm Print {print_job.external_id[:8]}",
-            options=cups_options
+            options=cups_options,
+            device=session.device,
         )
         
         if cups_job_id:
@@ -682,7 +683,7 @@ def session_jobs_view(request, session_id):
         
         for job in active_jobs:
             if job.device and job.device.cups_printer_name and job.cups_job_id:
-                job_status = get_job_status(job.device.cups_printer_name, job.cups_job_id)
+                job_status = get_job_status(job.device.cups_printer_name, job.cups_job_id, device=job.device)
                 if job_status:
                     logger.debug(f"Job {job.cups_job_id} status: state={job_status.get('job_state')}, reasons={job_status.get('job_state_reasons')}")
                     if is_job_completed(job_status['job_state']):
@@ -805,7 +806,24 @@ def start_scan_view(request, session_id):
         
         # Call Pi service
         try:
-            pi_url = f"{settings.PI_SCAN_SERVICE_URL}/scan/start"
+            # Prefer Device.ip_address (set via Admin UI), fall back to legacy
+            # PI_SCAN_SERVICE_URL env var if the device has no IP configured yet.
+            pi_scan_port = getattr(settings, 'PI_SCAN_SERVICE_PORT', 8000)
+            device_ip = (session.device.ip_address or "").strip() if session.device else ""
+            if device_ip:
+                pi_base_url = f"http://{device_ip}:{pi_scan_port}"
+            else:
+                pi_base_url = getattr(settings, 'PI_SCAN_SERVICE_URL', '')
+            if not pi_base_url:
+                logger.error(
+                    "No scan-service URL configured. Set Device.ip_address via "
+                    "admin UI or fall back to PI_SCAN_SERVICE_URL env var."
+                )
+                return Response(
+                    {"error": "Scan service not configured."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+            pi_url = f"{pi_base_url}/scan/start"
             logger.info(f"Calling Pi scan service at: {pi_url}")
             payload = {
                 "session_id": session.external_id,
@@ -1276,7 +1294,9 @@ def device_settings_update_view(request, device_id):
             device.price_per_page_gray = validated_data['price_per_page_gray']
         if 'max_session_duration_minutes' in validated_data:
             device.max_session_duration_minutes = validated_data['max_session_duration_minutes']
-        
+        if 'ip_address' in validated_data:
+            device.ip_address = (validated_data['ip_address'] or '').strip()
+
         device.save()
         
         from ..serializers import DeviceSerializer

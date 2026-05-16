@@ -391,16 +391,17 @@ class DeviceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'location', 'department', 'department_name',
             'is_active', 'allow_new_sessions', 'price_per_page_color', 'price_per_page_gray',
-            'max_session_duration_minutes', 'cups_printer_name',
+            'max_session_duration_minutes', 'cups_printer_name', 'ip_address',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 class DeviceSettingsUpdateSerializer(serializers.Serializer):
-    """Serializer for updating device settings (price, session duration, etc.)"""
+    """Serializer for updating device settings (price, session duration, IP, etc.)"""
     price_per_page_color = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
     price_per_page_gray = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
     max_session_duration_minutes = serializers.IntegerField(required=False, min_value=1)
+    ip_address = serializers.CharField(required=False, max_length=255, allow_blank=True)
 
 class DeviceToggleSerializer(serializers.Serializer):
     """Serializer for toggling device active/sessions (empty, just for consistency)"""
