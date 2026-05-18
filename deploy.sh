@@ -43,8 +43,8 @@ python manage.py migrate
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
-# Cronjob Management for Nightly Recalculation
-echo "Configuring nightly recalculation cronjob..."
+# Cronjob Management for Nightly Recalculation and Log Cleanup
+echo "Configuring scheduled cronjobs..."
 
 if ! command -v crontab &> /dev/null; then
     echo "Error: 'crontab' command not found. Please install the cron package on the server"
@@ -56,15 +56,18 @@ if ! command -v crontab &> /dev/null; then
 fi
 
 # Run at 04:00 AM every day
-CRON_CMD="0 4 * * * /bin/bash -c 'cd ${PROJECT_DIR} && set -a && source .env && set +a && venv/bin/python manage.py recalculate_tenant_stats' >> ${LOG_DIR}/cron.log 2>&1"
+CRON_STATS_CMD="0 4 * * * /bin/bash -c 'cd ${PROJECT_DIR} && set -a && source .env && set +a && venv/bin/python manage.py recalculate_tenant_stats' >> ${LOG_DIR}/cron.log 2>&1"
+
+# Run at 04:00 AM every Sunday for log cleanup
+CRON_LOG_CLEANUP_CMD="0 4 * * 0 /bin/bash -c 'cd ${PROJECT_DIR} && set -a && source .env && set +a && venv/bin/python manage.py cleanup_old_logs --days 30' >> ${LOG_DIR}/cron.log 2>&1"
 
 # 1. Dump current crontab
-# 2. Grep -v removes any existing lines containing 'recalculate_tenant_stats' (cleanup old jobs)
-# 3. Append the new command
+# 2. Grep -v removes any existing lines containing the managed commands (cleanup old jobs)
+# 3. Append the new commands
 # 4. Pipe into crontab to update
-(crontab -l 2>/dev/null | grep -v "recalculate_tenant_stats" || true; echo "$CRON_CMD") | crontab -
+(crontab -l 2>/dev/null | grep -Ev "recalculate_tenant_stats|cleanup_old_logs" || true; echo "$CRON_STATS_CMD"; echo "$CRON_LOG_CLEANUP_CMD") | crontab -
 
-echo "Cronjob updated successfully."
+echo "Scheduled cronjobs updated successfully."
 
 # Deactivate the virtual environment
 deactivate

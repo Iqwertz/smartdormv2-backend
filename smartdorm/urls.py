@@ -6,6 +6,7 @@ from .views import (
     tenant_views,
     department_views,
     engagement_views,
+    log_views,
     parcel_views,
     shared_views,
     attendance_views,
@@ -97,6 +98,9 @@ engagement_urlpatterns = [
     path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
     path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),
     path('misc/tenant-statistics/', engagement_views.tenant_statistics_view, name='misc-tenant-statistics'),
+
+    # System Logs
+    path('logs/', log_views.list_logs_view, name='engagement-logs-list'),
 ]
 
 
