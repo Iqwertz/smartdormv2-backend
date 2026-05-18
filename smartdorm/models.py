@@ -3,7 +3,16 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-logger = logging.getLogger(__name__) 
+from decimal import Decimal
+import uuid
+
+logger = logging.getLogger(__name__)
+
+
+def generate_external_id():
+    """Generate a unique external ID (UUID hex)"""
+    return uuid.uuid4().hex
+
 class Tenant(models.Model):
     id = models.IntegerField(primary_key=True)
     birthday = models.DateField()
@@ -406,3 +415,135 @@ class BaseAttendanceRecord(models.Model):
         db_table = 't_base_attendance_record'
         managed = True
         unique_together = ('tenant', 'event')
+
+# ============================================================================
+# Print & Scan System Models
+
+class Device(models.Model):
+    """Represents a printer/scanner"""
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255, help_text="Name of the printer (e.g. Samsung Xpress C1860FW)")
+    location = models.CharField(max_length=255, help_text="Location (e.g. Creative Department Room)")
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, help_text="Responsible department")
+    is_active = models.BooleanField(default=True, help_text="Global on/off")
+    allow_new_sessions = models.BooleanField(default=True, help_text="Allow new sessions")
+    price_per_page_color = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.10'), help_text="Price per color page in Euro")
+    price_per_page_gray = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.05'), help_text="Price per black & white page in Euro")
+    max_session_duration_minutes = models.IntegerField(default=30, help_text="Maximum session duration in minutes")
+    cups_printer_name = models.CharField(max_length=255, help_text="Name of the printer in CUPS (e.g. Samsung_C1860_Series)")
+    ip_address = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="IP address or hostname of the Raspberry Pi running CUPS and the scan service (e.g. 10.50.0.15). Falls back to CUPS_SERVER setting when empty.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_device'
+        verbose_name = "Device"
+        verbose_name_plural = "Devices"
+
+    def __str__(self):
+        return f"{self.name} ({self.location})"
+
+class PrintSession(models.Model):
+    """Active or past print/scan sessions"""
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        COMPLETED = 'COMPLETED', 'Completed'
+        EXPIRED = 'EXPIRED', 'Expired'
+        TERMINATED = 'TERMINATED', 'Terminated'
+    
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_print_session'
+        verbose_name = "Print Session"
+        verbose_name_plural = "Print Sessions"
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f"Session {self.external_id[:8]} - {self.tenant.get_full_name()} ({self.status})"
+
+class PrintJob(models.Model):
+    """Individual print jobs"""
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PRINTING = 'PRINTING', 'Printing'
+        COMPLETED = 'COMPLETED', 'Completed'
+        FAILED = 'FAILED', 'Failed'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+    
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(PrintSession, on_delete=models.CASCADE, db_column='session_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    filename = models.CharField(max_length=255)
+    color_mode = models.CharField(max_length=10, default='Color', choices=[('Color', 'Color'), ('Gray', 'Gray')], help_text="Color mode used for this job")
+    pages = models.IntegerField(null=True, blank=True, help_text="Number of printed pages (updated after printing)")
+    cost = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Cost in Euro (only for COMPLETED)")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this job was settled/paid by administration. NULL = still outstanding."
+    )
+    error_message = models.TextField(null=True, blank=True)
+    cups_job_id = models.CharField(max_length=255, null=True, blank=True, help_text="CUPS Job ID for status query")
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_print_job'
+        verbose_name = "Print Job"
+        verbose_name_plural = "Print Jobs"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Job {self.external_id[:8]} - {self.filename} ({self.status})"
+    
+    def save(self, *args, **kwargs):
+        # Calculate cost only for COMPLETED, otherwise 0
+        if self.status == 'COMPLETED' and self.pages and self.device:
+            # Use color or gray price depending on color_mode
+            if self.color_mode == 'Color':
+                price_per_page = self.device.price_per_page_color
+            else:
+                price_per_page = self.device.price_per_page_gray
+            self.cost = Decimal(str(self.pages)) * price_per_page
+            # Log the calculation for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"PrintJob.save() calculated cost: pages={self.pages}, color_mode={self.color_mode}, price_per_page={price_per_page}, cost={self.cost}")
+        elif self.status != 'COMPLETED':
+            self.cost = Decimal('0.00')
+        super().save(*args, **kwargs)
+
+class Scan(models.Model):
+    """Scanned documents (temporarily stored)"""
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(PrintSession, on_delete=models.CASCADE, db_column='session_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    filename = models.CharField(max_length=255)
+    file_path = models.CharField(max_length=500, help_text="Relative path to temporary storage (scans/temp/session_XXX/...)")
+    scanned_at = models.DateTimeField(auto_now_add=True)
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_scan'
+        verbose_name = "Scan"
+        verbose_name_plural = "Scans"
+        ordering = ['-scanned_at']
+
+    def __str__(self):
+        return f"Scan {self.external_id[:8]} - {self.filename}"
