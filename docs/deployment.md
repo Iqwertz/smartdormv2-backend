@@ -1,6 +1,7 @@
 # SmartDorm V2: Deployment Guide
 
 This document provides a rough guide to setting up and deploying the SmartDorm V2 backend (Django) and frontend (React/Vite) applications.
+There are some configurations in the firewall and nginx to allow https and communication between vms in the admin and dmz vlan, which are not covered in this document.
 
 ## Table of Contents
 1.  [Deployment Architecture Overview](#1-deployment-architecture-overview)
@@ -61,7 +62,7 @@ This is a **one-time setup** required for the backend VM (both dev and prod).
 ### Step 1: Install System Dependencies
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server
+sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server rsync libsasl2-dev python-dev-is-python3 libldap2-dev libssl-dev
 ```
 
 ### Step 2: Create Application User and Directory
@@ -70,10 +71,28 @@ The password for this user is the same on all VMS and saved in the vault under "
 ```bash
 sudo adduser smartdorm
 sudo mkdir -p /var/www/smartdorm/smartdormv2-backend
+sudo usermod -aG smartdorm www-data
+sudo chmod -R 750 /var/www/smartdorm/smartdormv2-backend/
+sudo chmod -R g+rx /var/www/smartdorm/smartdormv2-backend/
 sudo chown -R smartdorm:smartdorm /var/www/smartdorm
 ```
 
 ### Step 3: Configure Gunicorn `systemd` Service
+Create a service file that will create the gunicorn socket directory.
+
+```bash
+sudo nano /etc/tmpfiles.d/gunicorn.conf
+```
+Paste the following:
+```plaintext
+d /run/gunicorn 0770 smartdorm www-data -
+```
+Reload the `systemd` daemon to recognize the new tmpfiles configuration and create the directory:
+```bash
+sudo systemd-tmpfiles --create
+sudo systemctl daemon-reload
+```
+
 Create a service file to manage the Gunicorn process.
 
 `sudo nano /etc/systemd/system/gunicorn.service`
@@ -97,7 +116,7 @@ EnvironmentFile=/var/www/smartdorm/smartdormv2-backend/.env
 ExecStart=/var/www/smartdorm/smartdormv2-backend/venv/bin/gunicorn \
           --access-logfile - \
           --workers 3 \
-          --bind unix:/run/gunicorn.sock \
+          --bind unix:/run/gunicorn/gunicorn.sock \
           smartdorm.wsgi:application
 
 [Install]
@@ -125,7 +144,7 @@ server {
     # Forward all application requests to the Gunicorn socket
     location / {
         include proxy_params;
-        proxy_pass http://unix:/run/gunicorn.sock;
+        proxy_pass http://unix:/run/gunicorn/gunicorn.sock;
     }
 
     # Serve static files directly for performance
@@ -150,8 +169,6 @@ sudo ufw allow 'Nginx Full'
 sudo ufw enable
 ```
 
----
-
 ## 4. Part B: Frontend Deployment Setup
 
 This is a **one-time setup** required on each frontend VM.
@@ -159,7 +176,7 @@ This is a **one-time setup** required on each frontend VM.
 ### Step 1: Install Nginx
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y nginx
+sudo apt install -y nginx rsync
 ```
 
 ### Step 2: Create Application User and Directory
@@ -167,7 +184,19 @@ The application will run under its own user for security. The password for this 
 ```bash
 sudo adduser smartdorm
 sudo mkdir -p /var/www/smartdorm-frontend/html
+sudo usermod -aG smartdorm www-data
+sudo chmod -R 750 /var/www/smartdorm-frontend
+sudo chmod -R g+rx /var/www/smartdorm-frontend
 sudo chown -R smartdorm:smartdorm /var/www/smartdorm-frontend
+```
+
+To allow the GitLab CI/CD pipeline to restart the gunicorn service without a password prompt, you need to edit the sudoers file.
+```bash
+sudo visudo
+```
+Here add the following line to the end of the file to allow the `smartdorm` user to restart the gunicorn service without a password. This is needed for the deployment script to work.
+```plaintext
+smartdorm ALL=(ALL) NOPASSWD: /bin/systemctl restart gunicorn 
 ```
 
 ### Step 3: Configure Nginx to Serve the React App
@@ -211,19 +240,6 @@ sudo ufw enable
 ## 5. Part C: GitLab CI/CD Configuration
 
 Automation is handled by GitLab. This setup uses environment-scoped variables and deploy keys for security.
-
-### Step 1: GitLab Deploy Keys
-To allow GitLab's runner to pull code onto the server, a **Deploy Key** is used. This is needed only for the backend VMs.
-
-1.  **On the backend VM**, log in as the `smartdorm` user and generate an SSH key:
-    ```bash
-    su - smartdorm
-    ssh-keygen -t ed25519 -C "Backend Deploy Key"
-    cat ~/.ssh/id_ed25519.pub
-    ```
-2.  Copy the public key.
-3.  In the **smartdormV2-backend** GitLab project, go to **Settings > Repository > Deploy Keys**.
-4.  Add the key, giving it a descriptive title. **Do not grant write access.**
 
 ### Step 2: GitLab CI/CD Variables
 In each GitLab project (**frontend and backend**), go to **Settings > CI/CD > Variables**. Add the following variables, making sure to set the correct **Environment scope** (`development` or `production`) for each one.
@@ -293,7 +309,7 @@ The CI configuration is defined in the `.gitlab-ci.yml` file in the root of each
 With the setup complete, the deployment process is simple and automated:
 
 1.  **Develop:** A developer creates a feature branch and pushes their changes.
-2.  **Merge Request:** A Merge Request (MR) is created to target either the `development` or `main` branch.
+2.  **Merge Request:** A Merge Request (MR) is created to the development branch.
 3.  **Review & Merge:** The MR is reviewed and approved.
 4.  **Automatic Deployment (Development):**
     -   When an MR is merged into `development`, the pipeline automatically triggers and deploys the latest version to the development/test server.

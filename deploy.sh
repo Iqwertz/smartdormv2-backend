@@ -1,25 +1,17 @@
 #!/bin/bash
-#Deploy script for CI/CD pipeline on the vms. Dont execute this script locally
+# Deploy script for CI/CD pipeline on the vms.
+# This script is executed after rsync has copied the new code.
 set -e # Exit immediately if a command exits with a non-zero status.
 
-BRANCH_NAME=${1} # Accept the branch name as the first argument
+echo "Starting post-sync deployment tasks..."
 
-if [ -z "$BRANCH_NAME" ]; then
-    echo "Error: Branch name not provided."
-    exit 1
-fi
-
-echo "Starting deployment for branch: ${BRANCH_NAME}..."
+PROJECT_DIR="/var/www/smartdorm/smartdormv2-backend"
+VENV_PYTHON="${PROJECT_DIR}/venv/bin/python"
+MANAGE_PY="${PROJECT_DIR}/manage.py"
+LOG_DIR="${PROJECT_DIR}/logs"
 
 # Navigate to the project directory
-cd /var/www/smartdorm/smartdormv2-backend
-
-# Fetch all remote changes and switch to the correct branch
-git fetch origin
-git checkout ${BRANCH_NAME}
-
-# Pull the latest changes for that specific branch
-git pull origin ${BRANCH_NAME}
+cd "${PROJECT_DIR}"
 
 # Load environment variables from .env file
 if [ -f .env ]; then
@@ -32,14 +24,16 @@ else
 fi
 
 # Activate the virtual environment
+python3 -m venv venv
 source venv/bin/activate
 
 echo "Ensuring logs directory exists..."
-mkdir -p logs
+mkdir -p "${LOG_DIR}"
 
 # Install/update dependencies
 echo "Installing dependencies..."
 pip install -r requirements.txt
+pip install gunicorn
 
 # Run database migrations
 echo "Running database migrations..."
@@ -49,12 +43,38 @@ python manage.py migrate
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
+# Cronjob Management for Nightly Recalculation
+echo "Configuring nightly recalculation cronjob..."
+
+if ! command -v crontab &> /dev/null; then
+    echo "Error: 'crontab' command not found. Please install the cron package on the server"
+    echo "sudo apt-get install cron"
+    echo "Then enable and start the cron service:"
+    echo "sudo systemctl enable cron"
+    echo "sudo systemctl start cron"
+    exit 1
+fi
+
+# Run at 04:00 AM every day
+CRON_CMD="0 4 * * * /bin/bash -c 'cd ${PROJECT_DIR} && set -a && source .env && set +a && venv/bin/python manage.py recalculate_tenant_stats' >> ${LOG_DIR}/cron.log 2>&1"
+
+# 1. Dump current crontab
+# 2. Grep -v removes any existing lines containing 'recalculate_tenant_stats' (cleanup old jobs)
+# 3. Append the new command
+# 4. Pipe into crontab to update
+(crontab -l 2>/dev/null | grep -v "recalculate_tenant_stats" || true; echo "$CRON_CMD") | crontab -
+
+echo "Cronjob updated successfully."
+
 # Deactivate the virtual environment
 deactivate
+
+# echo "Setting file permissions..."
+# sudo chown -R www-data:www-data /var/www/smartdorm/smartdormv2-backend
 
 echo "Deployment finished. Restarting Gunicorn service..."
 
 # Restart the Gunicorn service
 sudo systemctl restart gunicorn
 
-echo "Gunicorn restarted. Deployment for ${BRANCH_NAME} complete."
+echo "Gunicorn restarted. Deployment complete."

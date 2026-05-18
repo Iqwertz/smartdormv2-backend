@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan
 from django.utils import timezone
 from django.urls import reverse
 import base64
@@ -81,10 +81,25 @@ class TenantMoveSerializer(serializers.Serializer):
             raise serializers.ValidationError("Room does not exist.")
         return value
 
+class TenantTerminationSerializer(serializers.Serializer):
+    move_out_date = serializers.DateField()
+
+    def validate_move_out_date(self, value):
+        if value <= timezone.now().date():
+            raise serializers.ValidationError("Das Auszugsdatum muss in der Zukunft liegen.")
+        return value
+
+
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = ['id', 'name', 'full_name']
+        fields = ['id', 'name', 'full_name', 'points', 'size']
+        
+class NewDepartmentSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    full_name = serializers.CharField(max_length=255)
+    points = serializers.DecimalField(max_digits=19, decimal_places=2, min_value=0)
+    size = serializers.IntegerField(min_value=0)
 
 class EngagementSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer(read_only=True)
@@ -195,10 +210,6 @@ class ParcelCreateRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Either 'room' or both 'name' and 'surname' must be provided."
             )
-        if room and (name or surname):
-            raise serializers.ValidationError(
-                "Provide 'room' OR ('name' and 'surname'), not both."
-            )
         return data
 
 class ParcelSerializer(serializers.ModelSerializer):
@@ -253,9 +264,11 @@ class DepartmentSignatureSerializer(serializers.ModelSerializer):
 
 class ClaimSerializer(serializers.ModelSerializer):
     tenant = TenantSerializer(read_only=True)
+    move_out = serializers.DateField(source='tenant.move_out', read_only=True)
+    
     class Meta:
         model = Claim
-        fields = ['id', 'created_on', 'status', 'type', 'tenant', 'external_id']
+        fields = ['id', 'created_on', 'status', 'type', 'tenant', 'move_out', 'external_id']
         
 class AdminTenantSerializer(serializers.ModelSerializer):
     """Minimal tenant info for the engagement list."""
@@ -299,3 +312,240 @@ class TenantOverviewSerializer(TenantSerializer):
 
     class Meta(TenantSerializer.Meta):
         fields = TenantSerializer.Meta.fields + ['engagements']
+        
+        
+class TerminationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Termination
+        fields = ['tenant', 'date', 'note', 'created_at']
+        read_only_fields = ['created_at', 'tenant']
+
+class DepartmentExtensionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DepartmentExtension
+        fields = ['id', 'tenant', 'months', 'note', 'created_at']
+        read_only_fields = ['id', 'created_at', 'tenant']
+
+class DepartmentExtensionCreateSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = DepartmentExtension
+        fields = ['tenant_id', 'months', 'note']
+
+class EventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Event
+        fields = ['id', 'name', 'parts_count', 'required_parts', 'admin_groups', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+class AttendanceSessionSerializer(serializers.ModelSerializer):
+    event_details = EventSerializer(source='event', read_only=True)
+    
+    class Meta:
+        model = AttendanceSession
+        fields = ['id', 'event', 'event_details', 'title', 'date', 'status', 'current_part', 'last_rotated_at']
+        read_only_fields = ['id', 'date', 'last_rotated_at']
+
+class AttendanceRecordSerializer(serializers.ModelSerializer):
+    # To expose some tenant details easily
+    tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+    session_date = serializers.DateField(source='session.date', read_only=True)
+    session_title = serializers.CharField(source='session.title', read_only=True)
+    event_name = serializers.CharField(source='session.event.name', read_only=True)
+    event_parts_count = serializers.IntegerField(source='session.event.parts_count', read_only=True)
+    event_required_parts = serializers.IntegerField(source='session.event.required_parts', read_only=True)
+    
+    class Meta:
+        model = AttendanceRecord
+        fields = [
+            'id', 'tenant', 'tenant_name', 'session', 'part', 'timestamp', 'is_manual_override',
+            'session_date', 'session_title', 'event_name', 'event_parts_count', 'event_required_parts'
+        ]
+        read_only_fields = ['id', 'timestamp']
+
+
+class BaseAttendanceRecordSerializer(serializers.ModelSerializer):
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    tenant_name = serializers.CharField(source='tenant.get_full_name', read_only=True)
+    
+    class Meta:
+        model = BaseAttendanceRecord
+        fields = ['id', 'tenant', 'tenant_name', 'event', 'event_name', 'parts_count', 'note', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+
+        fields = TenantSerializer.Meta.fields + ['engagements']
+
+# ============================================================================
+# Print & Scan System Serializers
+# ============================================================================
+
+class DeviceSerializer(serializers.ModelSerializer):
+    """Serializer for Device model"""
+    department_name = serializers.CharField(source='department.name', read_only=True)
+    
+    class Meta:
+        model = Device
+        fields = [
+            'id', 'name', 'location', 'department', 'department_name',
+            'is_active', 'allow_new_sessions', 'price_per_page_color', 'price_per_page_gray',
+            'max_session_duration_minutes', 'cups_printer_name', 'ip_address',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+class DeviceSettingsUpdateSerializer(serializers.Serializer):
+    """Serializer for updating device settings (price, session duration, IP, etc.)"""
+    price_per_page_color = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
+    price_per_page_gray = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, min_value=0)
+    max_session_duration_minutes = serializers.IntegerField(required=False, min_value=1)
+    ip_address = serializers.CharField(required=False, max_length=255, allow_blank=True)
+
+class DeviceToggleSerializer(serializers.Serializer):
+    """Serializer for toggling device active/sessions (empty, just for consistency)"""
+    pass
+
+class PrintSessionSerializer(serializers.ModelSerializer):
+    """Serializer for PrintSession model"""
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    device_name = serializers.CharField(source='device.name', read_only=True)
+    total_cost = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = PrintSession
+        fields = [
+            'id', 'external_id', 'tenant', 'tenant_name', 'device', 'device_name',
+            'started_at', 'ended_at', 'status', 'total_cost'
+        ]
+        read_only_fields = ['id', 'external_id', 'started_at']
+    
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return obj.tenant.get_full_name()
+        return None
+    
+    def get_total_cost(self, obj):
+        """Calculate total cost of all completed print jobs in this session"""
+        from decimal import Decimal
+        completed_jobs = obj.printjob_set.filter(status='COMPLETED')
+        total = sum(job.cost for job in completed_jobs if job.cost) or Decimal('0.00')
+        return str(total)
+
+class PrintSessionDetailSerializer(PrintSessionSerializer):
+    """Extended serializer with related jobs and scans"""
+    jobs = serializers.SerializerMethodField(read_only=True)
+    scans = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta(PrintSessionSerializer.Meta):
+        fields = PrintSessionSerializer.Meta.fields + ['jobs', 'scans']
+    
+    def get_jobs(self, obj):
+        jobs = PrintJob.objects.filter(session=obj).order_by('-created_at')
+        return PrintJobSerializer(jobs, many=True).data
+    
+    def get_scans(self, obj):
+        scans = Scan.objects.filter(session=obj).order_by('-scanned_at')
+        return ScanSerializer(scans, many=True).data
+
+class PrintJobCreateSerializer(serializers.Serializer):
+    """Serializer for creating print jobs with options"""
+    color_mode = serializers.ChoiceField(
+        choices=[('Color', 'Color'), ('Gray', 'Gray')],
+        default='Color',
+        required=False,
+        help_text="Color mode: 'Color' or 'Gray' (black & white)"
+    )
+    copies = serializers.IntegerField(
+        default=1,
+        min_value=1,
+        max_value=10,
+        required=False,
+        help_text="Number of copies to print"
+    )
+    # Note: page-ranges is complex (e.g. "1-3,5,7-9"), so we'll skip it for now
+    # User can just specify copies or we use the full document
+
+class PrintJobSerializer(serializers.ModelSerializer):
+    """Serializer for PrintJob model"""
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = PrintJob
+        fields = [
+            'id', 'external_id', 'session', 'tenant', 'tenant_name', 'device',
+            'filename', 'color_mode', 'pages', 'cost', 'status', 'created_at', 'completed_at',
+            'error_message', 'cups_job_id'
+        ]
+        read_only_fields = [
+            'id', 'external_id', 'tenant', 'device', 'pages', 'cost',
+            'created_at', 'completed_at', 'cups_job_id'
+        ]
+    
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return obj.tenant.get_full_name()
+        return None
+
+class ScanSerializer(serializers.ModelSerializer):
+    """Serializer for Scan model"""
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    download_url = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = Scan
+        fields = [
+            'id', 'external_id', 'session', 'tenant', 'tenant_name', 'device',
+            'filename', 'file_path', 'scanned_at', 'download_url'
+        ]
+        read_only_fields = ['id', 'external_id', 'tenant', 'device', 'scanned_at']
+    
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return obj.tenant.get_full_name()
+        return None
+    
+    def get_download_url(self, obj):
+        # URL for download endpoint
+        return f'/api/tenants/printing/scans/{obj.external_id}/download/'
+
+class DeviceStatusSerializer(serializers.Serializer):
+    """Serializer for device status response"""
+    device_id = serializers.IntegerField()
+    device_name = serializers.CharField()
+    location = serializers.CharField()
+    is_active = serializers.BooleanField()
+    allow_new_sessions = serializers.BooleanField()
+    price_per_page_color = serializers.DecimalField(max_digits=5, decimal_places=2)
+    price_per_page_gray = serializers.DecimalField(max_digits=5, decimal_places=2)
+    active_session = serializers.DictField(required=False, allow_null=True)
+    available = serializers.BooleanField()
+
+class TenantBillingOverviewSerializer(serializers.Serializer):
+    """Serializer for tenant billing overview"""
+    tenant_id = serializers.IntegerField()
+    tenant_name = serializers.CharField()
+    surname = serializers.CharField()
+    name = serializers.CharField()
+    email = serializers.CharField()
+    current_room = serializers.CharField()
+    total_cost = serializers.CharField()
+    total_pages = serializers.IntegerField()
+    total_jobs = serializers.IntegerField()
+    total_sessions = serializers.IntegerField()
+    debt = serializers.CharField()
+    debt_pages = serializers.IntegerField()
+    debt_jobs = serializers.IntegerField()
+
+class MyCostsSerializer(serializers.Serializer):
+    """Serializer for user costs overview"""
+    total_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    this_month_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total_pages = serializers.IntegerField()
+    this_month_pages = serializers.IntegerField()
+    total_jobs = serializers.IntegerField()
+    this_month_jobs = serializers.IntegerField()
+    debt = serializers.DecimalField(max_digits=10, decimal_places=2)
+    debt_pages = serializers.IntegerField()
+    debt_jobs = serializers.IntegerField()

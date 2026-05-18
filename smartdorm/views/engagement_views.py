@@ -6,7 +6,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Max, Sum, Prefetch
+from django.db.models import Max, Sum, Count, Prefetch
 import uuid
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
@@ -20,9 +20,9 @@ from ..utils.email_utils import send_email_message
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant, Department
 from ..serializers import (
-    GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
+    DepartmentSerializer, GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
     HeimratEngagementApplicationCreateSerializer, AdminEngagementListSerializer,
-    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer, TenantOverviewSerializer
+    EngagementCreateByHeimratSerializer, EngagementUpdateSerializer, NewDepartmentSerializer, TenantOverviewSerializer
 )
 from ..utils import ldap_utils
 from rest_framework.response import Response
@@ -607,6 +607,18 @@ def create_engagement_admin_view(request):
         points=department.points
     )
     
+    # Update tenant's total compensated points if this engagement is compensated
+    if engagement.compensate:
+        tenant = Tenant.objects.get(id=data['tenant_id'])
+        total_points = Engagement.objects.filter(
+            tenant=tenant, compensate=True
+        ).aggregate(total=Sum('points'))['total'] or 0
+        tenant.current_points = total_points
+        tenant.save()
+        
+
+     
+    
     # Send email to tenant about new engagement
     tenant = Tenant.objects.get(id=data['tenant_id'])
     
@@ -620,6 +632,26 @@ def create_engagement_admin_view(request):
                 'semester': data['semester'],
             }
     )
+    
+    # Check if engagement is in current semester and update ldap roles
+    settings = GlobalAppSettings.load()
+    if data['semester'] == settings.current_semester:
+        group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+        group_cn = _get_ldap_group_name_from_department(department.full_name, tenant)
+        group_dn = f"cn={group_cn},{group_base_dn}"
+        success = ldap_utils.add_user_to_group(tenant.username, group_dn)
+        if success:
+            logger.info(f"Added user '{tenant.username}' to LDAP group '{group_cn}' for engagement '{department.name}'.")
+        else:
+            logger.error(f"Failed to add user '{tenant.username}' to LDAP group '{group_cn}' for engagement '{department.name}'.")
+        # Also add tenant to 'HSV' group
+        hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+        success_hsv = ldap_utils.add_user_to_group(tenant.username, hsv_group_dn)
+        if success_hsv:
+            logger.info(f"Added user '{tenant.username}' to LDAP group 'HSV' for engagement '{department.name}'.")
+        else:
+            logger.error(f"Failed to add user '{tenant.username}' to LDAP group 'HSV' for engagement '{department.name}'.")
+            
     response_serializer = AdminEngagementListSerializer(engagement)
     return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -650,7 +682,35 @@ def delete_engagement_view(request, engagement_id):
     delete_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
+    tenant = engagement.tenant
     engagement.delete()
+    
+    #Recalculate tenant's total compensated points
+    total_points = Engagement.objects.filter(
+        tenant=tenant, compensate=True
+    ).aggregate(total=Sum('points'))['total'] or 0
+    
+    tenant.current_points = total_points
+    tenant.save()
+    
+    #If engagement is in current semester, remove ldap role
+    settings = GlobalAppSettings.load()
+    if engagement.semester == settings.current_semester:
+        group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+        group_cn = _get_ldap_group_name_from_department(engagement.department.full_name, tenant)
+        group_dn = f"cn={group_cn},{group_base_dn}"
+        success = ldap_utils.remove_user_from_group(tenant.username, group_dn)
+        if success:
+            logger.info(f"Removed user '{tenant.username}' from LDAP group '{group_cn}' for deleted engagement '{engagement.department.name}'.")
+        else:
+            logger.error(f"Failed to remove user '{tenant.username}' from LDAP group '{group_cn}' for deleted engagement '{engagement.department.name}'.")
+        # Also remove from 'HSV' group
+        hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+        success_hsv = ldap_utils.remove_user_from_group(tenant.username, hsv_group_dn)
+        
+        if not success_hsv:
+            logger.error(f"Failed to remove user '{tenant.username}' from LDAP group 'HSV' for deleted engagement '{engagement.department.name}'.")
+
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['PUT'])
@@ -692,6 +752,20 @@ def toggle_engagement_compensate_view(request, engagement_id):
             context={
                 'greeting': tenant.name,
                 'department': department.full_name,
+                'semester': engagement.semester,
+                'points': engagement.points,
+                'totalPoints': total_points
+            }
+        )
+    else:
+        # Optionally notify tenant about de-compensation
+        send_email_message(
+            recipient_list=[tenant.email],
+            subject=f'Rücknahme der Referatsentlastung {engagement.department.name}',
+            html_template_name='email/tenant-engagement-decompensation.html',
+            context={
+                'greeting': tenant.name,
+                'department': engagement.department.full_name,
                 'semester': engagement.semester,
                 'points': engagement.points,
                 'totalPoints': total_points
@@ -797,12 +871,18 @@ def export_engagement_tenants_csv(request):
     return response
 
 
-def _get_ldap_group_name_from_department(department_full_name):
+def _get_ldap_group_name_from_department(department_full_name, tenant):
     """Transforms a department full name into an LDAP group CN."""
     # Take first word if there's a space
     name = department_full_name.split(' ')[0]
-    # Replace Umlauts and make lowercase
-    name = name.lower().replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+    # Replace Umlauts
+    name = name.replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+    
+    #Special case for Flursprecher they also get assigned with the correct floor
+    if name.lower() == 'flursprecher':
+        if tenant.current_floor:
+            name += f"-{tenant.current_floor}"
+    print(name)
     return name
 
 @transaction.atomic
@@ -834,22 +914,33 @@ def update_semester_and_ldap_view(request):
     logger.info(f"Found {old_engagements.count()} engagements in old semester '{old_semester}' to process for LDAP group removal.")
     for eng in old_engagements:
         if eng.tenant.username:
-            group_cn = _get_ldap_group_name_from_department(eng.department.full_name)
+            group_cn = _get_ldap_group_name_from_department(eng.department.full_name, eng.tenant)
             group_dn = f"cn={group_cn},{group_base_dn}"
             success = ldap_utils.remove_user_from_group(eng.tenant.username, group_dn)
             if not success:
                 ldap_errors.append(f"Failed to remove {eng.tenant.username} from {group_dn}")
+            # Remove tenant from 'HSV' group as well
+            hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+            success_hsv = ldap_utils.remove_user_from_group(eng.tenant.username, hsv_group_dn)
+            if not success_hsv:
+                ldap_errors.append(f"Failed to remove {eng.tenant.username} from {hsv_group_dn}")
 
     # Add tenants to new semester's engagement groups
     new_engagements = Engagement.objects.filter(semester=new_semester).select_related('tenant', 'department')
     logger.info(f"Found {new_engagements.count()} engagements in new semester '{new_semester}' to process for LDAP group addition.")
     for eng in new_engagements:
         if eng.tenant.username:
-            group_cn = _get_ldap_group_name_from_department(eng.department.full_name)
+            group_cn = _get_ldap_group_name_from_department(eng.department.full_name, eng.tenant)
             group_dn = f"cn={group_cn},{group_base_dn}"
             success = ldap_utils.add_user_to_group(eng.tenant.username, group_dn)
             if not success:
                 ldap_errors.append(f"Failed to add {eng.tenant.username} to {group_dn}")
+            # Also add tenant to 'HSV' group
+            hsv_group_dn = "cn=HSV,ou=groups2,dc=schollheim,dc=net"
+            success_hsv = ldap_utils.add_user_to_group(eng.tenant.username, hsv_group_dn)
+            if not success_hsv:
+                ldap_errors.append(f"Failed to add {eng.tenant.username} to {hsv_group_dn}")
+            
 
     if ldap_errors:
         # The transaction will be rolled back automatically on exception.
@@ -877,7 +968,7 @@ def export_tenants_csv(request):
     Filter by floor using query parameter: ?floor=H1EG or ?floor=all
     CSV format: "firstname","lastname","email","room_number"
     """
-    export_tenants_csv.required_groups = ['Heimrat', 'ADMIN']
+    export_tenants_csv.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat","Finanzenreferat","Schlichtungsreferat", "ADMIN"]
     
     floor = request.GET.get('floor', 'all')
     
@@ -918,6 +1009,78 @@ def export_tenants_csv(request):
     
     return response
 
+# --- Derpartment Management ---
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def list_departments_view(request):
+    """
+    Lists all departments.
+    """
+    list_departments_view.required_groups = ['Netzwerkreferat']
+
+    departments = Department.objects.all().order_by('name')
+    serializer = DepartmentSerializer(departments, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def create_department_view(request):
+    """
+    Creates a new department.
+    """
+    create_department_view.required_groups = ['Netzwerkreferat']
+
+    serializer = NewDepartmentSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    max_id_result = Department.objects.aggregate(max_id=Max('id'))
+    new_id = (max_id_result['max_id'] or 0) + 1
+
+    department = Department.objects.create(
+        id=new_id,
+        name=serializer.validated_data['name'],
+        full_name=serializer.validated_data['full_name'],
+        points=serializer.validated_data['points'],
+        size=serializer.validated_data['size']
+    )
+    response_serializer = DepartmentSerializer(department)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def update_department_view(request, department_id):
+    """
+    Updates an existing department.
+    """
+    update_department_view.required_groups = ['Netzwerkreferat']
+
+    department = get_object_or_404(Department, id=department_id)
+    serializer = DepartmentSerializer(department, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    department = serializer.save()
+    response_serializer = DepartmentSerializer(department)
+    return Response(response_serializer.data)
+
+# ToDO: This is not completly correct yet. We need to check if there are engagements for this department first before deleting it. Now it will just fail and a user can only delete departments that dont have any engagement entries yet. But since this function isnt used often this is fine for now.
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def delete_department_view(request, department_id):
+    """
+    Deletes a department.
+    """
+    delete_department_view.required_groups = ['Netzwerkreferat']
+
+    department = get_object_or_404(Department, id=department_id)
+    department.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 # --- Misc Overview Endpoints ---
 
@@ -928,8 +1091,7 @@ def tenant_overview_data_view(request):
     """
     Retrieves a list of all current tenants, including their full details and all associated engagements.
     """
-    tenant_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
-
+    tenant_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat", "HSV-Vertreter", "ADMIN"]
     today = timezone.now().date()
     
     # Prefetch engagements and their related departments to avoid N+1 queries
@@ -950,12 +1112,164 @@ def tenant_overview_data_view(request):
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def tenant_statistics_view(request):
+    """
+    Returns aggregate statistics over tenants.
+
+    Query parameter:
+      ?scope=current  - only tenants currently living in the dorm (default)
+      ?scope=all      - all tenants ever stored in the database
+    """
+    tenant_statistics_view.required_groups = HEIMRAT_INFO_GROUPS
+
+    scope = request.GET.get('scope', 'current').lower()
+    if scope not in ['current', 'all']:
+        return Response(
+            {"error": "Parameter 'scope' must be 'current' or 'all'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    today = timezone.now().date()
+
+    if scope == 'current':
+        base_qs = Tenant.objects.filter(move_in__lte=today, move_out__gte=today)
+    else:
+        base_qs = Tenant.objects.all()
+
+    tenants_list = list(base_qs.values(
+        'id', 'birthday', 'move_in', 'move_out',
+        'gender', 'nationality', 'university', 'study_field',
+        'current_points', 'current_floor'
+    ))
+
+    total = len(tenants_list)
+    if total == 0:
+        return Response({"scope": scope, "total_tenants": 0})
+
+    def _avg(lst):
+        return round(sum(lst) / len(lst), 2) if lst else None
+
+    # --- Age ---
+    ages = []
+    for t in tenants_list:
+        bd = t['birthday']
+        if bd:
+            age = today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+            ages.append(age)
+
+    # --- Stay duration (actual days lived so far / in total) ---
+    stay_days = []
+    for t in tenants_list:
+        mi = t['move_in']
+        mo = t['move_out']
+        if mi:
+            end = min(mo, today) if mo else today
+            days = (end - mi).days
+            if days >= 0:
+                stay_days.append(days)
+
+    avg_stay_days = _avg(stay_days)
+    avg_stay_months = round(avg_stay_days / 30.44, 1) if avg_stay_days is not None else None
+
+    # --- Gender distribution ---
+    gender_counts = defaultdict(int)
+    for t in tenants_list:
+        gender_counts[(t['gender'] or 'Unbekannt').strip()] += 1
+
+    # --- Nationality breakdown ---
+    nationality_counts = defaultdict(int)
+    for t in tenants_list:
+        nationality_counts[(t['nationality'] or 'Unbekannt').strip()] += 1
+
+    # --- University breakdown ---
+    university_counts = defaultdict(int)
+    for t in tenants_list:
+        university_counts[(t['university'] or 'Unbekannt').strip()] += 1
+
+    # --- Study field breakdown ---
+    study_field_counts = defaultdict(int)
+    for t in tenants_list:
+        study_field_counts[(t['study_field'] or 'Unbekannt').strip()] += 1
+
+    # --- Points ---
+    points_values = [
+        float(t['current_points'])
+        for t in tenants_list
+        if t['current_points'] is not None
+    ]
+
+    # --- Floor distribution ---
+    floor_counts = defaultdict(int)
+    for t in tenants_list:
+        floor_counts[(t['current_floor'] or 'Unbekannt').strip()] += 1
+
+    # --- Engagements per tenant ---
+    tenant_ids = [t['id'] for t in tenants_list]
+    eng_per_tenant_qs = (
+        Engagement.objects
+        .filter(tenant_id__in=tenant_ids)
+        .values('tenant_id')
+        .annotate(count=Count('id'))
+    )
+    eng_count_map = {row['tenant_id']: row['count'] for row in eng_per_tenant_qs}
+    eng_counts_per_tenant = [eng_count_map.get(t['id'], 0) for t in tenants_list]
+    tenants_with_any_engagement = sum(1 for c in eng_counts_per_tenant if c > 0)
+    avg_engagements = _avg(eng_counts_per_tenant)
+
+    response_data = {
+        "scope": scope,
+        "total_tenants": total,
+        "age": {
+            "average": _avg(ages),
+            "min": min(ages) if ages else None,
+            "max": max(ages) if ages else None,
+        },
+        "stay_duration": {
+            "average_days": avg_stay_days,
+            "average_months": avg_stay_months,
+            "min_days": min(stay_days) if stay_days else None,
+            "max_days": max(stay_days) if stay_days else None,
+        },
+        "gender_distribution": dict(
+            sorted(gender_counts.items(), key=lambda x: -x[1])
+        ),
+        "nationalities": dict(
+            sorted(nationality_counts.items(), key=lambda x: -x[1])
+        ),
+        "universities": dict(
+            sorted(university_counts.items(), key=lambda x: -x[1])
+        ),
+        "study_fields": dict(
+            sorted(study_field_counts.items(), key=lambda x: -x[1])
+        ),
+        "points": {
+            "average": _avg(points_values),
+            "min": min(points_values) if points_values else None,
+            "max": max(points_values) if points_values else None,
+            "total": round(sum(points_values), 2) if points_values else 0,
+        },
+        "floor_distribution": dict(
+            sorted(floor_counts.items(), key=lambda x: x[0])
+        ),
+        "engagements": {
+            "tenants_with_any_engagement": tenants_with_any_engagement,
+            "tenants_without_engagement": total - tenants_with_any_engagement,
+            "average_per_tenant": avg_engagements,
+        },
+    }
+
+    return Response(response_data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 def engagement_overview_data_view(request):
     """
     Retrieves all engagement entries, grouped by department.
     Each engagement includes minimal tenant info.
     """
-    engagement_overview_data_view.required_groups = HEIMRAT_INFO_GROUPS
+    engagement_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat","Finanzenreferat","Schlichtungsreferat", "ADMIN"]
 
     # Query all engagements with related data
     engagements_query = Engagement.objects.select_related(

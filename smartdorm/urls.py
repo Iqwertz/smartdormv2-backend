@@ -1,7 +1,6 @@
 from django.urls import path, include
 from django.views.generic import TemplateView
 
-from .views.views import tenant_dashboard, TenantListCreateAPIView, TenantDetailAPIView
 from .views import (
     auth_views,
     tenant_views,
@@ -9,6 +8,8 @@ from .views import (
     engagement_views,
     parcel_views,
     shared_views,
+    attendance_views,
+    printing_views,
 )
 
 # Auth-related URLs
@@ -16,6 +17,8 @@ auth_urlpatterns = [
     path('login/', auth_views.login_view, name='api-login'),
     path('logout/', auth_views.logout_view, name='api-logout'),
     path('me/', auth_views.me_view, name='api-me'),
+    path('password-reset/', auth_views.password_reset_view, name='api-password-reset'),
+    path('password-change/', auth_views.password_change_view, name='api-password-change'),
 ]
 
 # Parcel-related URLs
@@ -40,6 +43,22 @@ tenant_urlpatterns = [
     path('engagement-applications/', tenant_views.list_engagement_applications_view, name='list-engagement-applications'),
     path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
+    path('my-contract-calculation/', tenant_views.my_contract_calculation_view, name='my-contract-calculation'),
+
+    # Print & Scan URLs - IMPORTANT: device-status MUST come before sessions/<str:session_id> to avoid URL conflicts
+    path('printing/device-status/', printing_views.device_status_view, name='printing-device-status'),
+    path('printing/my-costs/', printing_views.my_costs_view, name='printing-my-costs'),
+    path('printing/my-sessions/', printing_views.my_sessions_view, name='printing-my-sessions'),
+    path('printing/my-scans/', printing_views.my_scans_view, name='printing-my-scans'),
+    path('printing/sessions/start/', printing_views.start_session_view, name='printing-sessions-start'),
+    # NOTE: sessions/<str:session_id> must come AFTER all other specific printing paths
+    path('printing/sessions/<str:session_id>/', printing_views.session_detail_view, name='printing-sessions-detail'),
+    path('printing/sessions/<str:session_id>/end/', printing_views.end_session_view, name='printing-sessions-end'),
+    path('printing/sessions/<str:session_id>/print/', printing_views.print_job_view, name='printing-sessions-print'),
+    path('printing/sessions/<str:session_id>/jobs/', printing_views.session_jobs_view, name='printing-sessions-jobs'),
+    path('printing/sessions/<str:session_id>/scans/', printing_views.session_scans_view, name='printing-sessions-scans'),
+    path('printing/sessions/<str:session_id>/scan/start/', printing_views.start_scan_view, name='printing-sessions-scan-start'),
+    path('printing/scans/<str:scan_id>/download/', printing_views.download_scan_view, name='printing-scans-download'),
 ]
 
 # Engagement-related URLs
@@ -59,16 +78,25 @@ engagement_urlpatterns = [
     path('heimrat/engagements/compensate-all/', engagement_views.compensate_all_engagements_view, name='admin-compensate-all'),
 
     # Tenant Data
-    path('heimrat/export_tenants-csv/', engagement_views.export_tenants_csv, name='export-tenants-csv'),
+    path('export_tenants-csv/', engagement_views.export_tenants_csv, name='export-tenants-csv'),
 
     # Settings for Heimrat
     path('heimrat/set-semester/', engagement_views.set_current_semester_view, name='set-semester'),
     path('heimrat/update-semester-and-ldap/', engagement_views.update_semester_and_ldap_view, name='update-semester-and-ldap'),
     path('heimrat/set-applications-open/', engagement_views.set_applications_open_view, name='set-applications-open'),
     path('heimrat/set-show-applications/', engagement_views.set_show_applications_view, name='set-show-applications'),
+    
+    #Netzwerkreferat Views
+    path('departments/list/', engagement_views.list_departments_view, name='list-departments'),
+    path('departments/create/', engagement_views.create_department_view, name='create-department'),
+    path('departments/<int:department_id>/update/', engagement_views.update_department_view, name='update-department'),
+    path('departments/<int:department_id>/delete/', engagement_views.delete_department_view, name='delete-department'),
+    
+    # Miscellaneous
     path('misc/export-engagement-tenants-csv/', engagement_views.export_engagement_tenants_csv, name='export-engagement-tenants-csv'),
     path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
     path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),
+    path('misc/tenant-statistics/', engagement_views.tenant_statistics_view, name='misc-tenant-statistics'),
 ]
 
 
@@ -87,6 +115,7 @@ departure_management_urlpatterns = [
     path('list/', department_views.list_departures_view, name='departure-list'),
     path('<int:departure_id>/remind/', department_views.send_departure_reminder_view, name='departure-remind'),
     path('<int:departure_id>/close/', department_views.close_departure_view, name='departure-close'),
+    path('<int:departure_id>/revert/', department_views.revert_departure_view, name='departure-revert'),
     path('<int:departure_id>/download-pdf/', department_views.download_departure_pdf_view, name='departure-download-pdf'),
 ]
 
@@ -108,10 +137,13 @@ department_urlpatterns = [
     path('tenant-data/', department_views.all_tenant_data_view, name='department-tenant-data'),
     path('tenant-data/<int:tenant_id>/', department_views.get_tenant_detail_view, name='department-get-tenant'),
     path('tenant-data/<int:tenant_id>/update/', department_views.update_tenant_view, name='department-update-tenant'),
+    path('tenant-data/<int:tenant_id>/terminate/', department_views.terminate_tenant_view, name='department-terminate-tenant'),
+    path('tenant-data/<int:tenant_id>/termination/', department_views.manage_termination_view, name='department-manage-termination'),
     path('tenant-data/<int:tenant_id>/delete/', department_views.delete_tenant_view, name='department-delete-tenant'),
     path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
     path('tenant-data/<int:tenant_id>/rentals/', department_views.list_tenant_rentals_view, name='department-list-rentals'),
     path('tenant-data/<int:tenant_id>/move/', department_views.move_tenant_view, name='department-move-tenant'),
+    path('rentals/<int:rental_id>/delete/', department_views.delete_rental_view, name='department-delete-rental'),
     path('create-new-tenant/', department_views.create_new_tenant_view, name='department-create-new-tenant'),
     # Subtenant management
     path('subtenants/', include(subtenant_urlpatterns)),
@@ -122,12 +154,10 @@ department_urlpatterns = [
     path('departures/', include(departure_management_urlpatterns)),
     # Claim (Extension) Management
     path('claims/', include(claim_management_urlpatterns)),
-]
-
-# Admin-related URLs
-admin_urlpatterns = [
-    path('', TenantListCreateAPIView.as_view(), name='tenant-list-create'),
-    path('<int:pk>/', TenantDetailAPIView.as_view(), name='tenant-detail'),
+    # Department Extensions Management
+    path('tenant-data/<int:tenant_id>/department-extensions/', department_views.manage_department_extensions_view, name='department-list-extensions'),
+    path('department-extensions/create/', department_views.manage_department_extensions_view, name='department-create-extension'),
+    path('department-extensions/<int:extension_id>/', department_views.update_department_extension_view, name='department-update-extension'),
 ]
 
 # Shared/common URLs
@@ -137,14 +167,52 @@ common_urlpatterns = [
     path('departments-for-select/', shared_views.departments_for_select_view, name='common-departments-for-select'),
 ]
 
+# Attendance URLs
+attendance_urlpatterns = [
+    path('events/', attendance_views.list_create_events_view, name='attendance-events'),
+    path('events/manageable/', attendance_views.list_manageable_events_view, name='attendance-manageable-events'),
+    path('events/<int:event_id>/', attendance_views.detail_event_view, name='attendance-event-detail'),
+    path('events/<int:event_id>/sessions/', attendance_views.list_create_sessions_view, name='attendance-sessions'),
+    path('events/<int:event_id>/base-attendance/', attendance_views.base_attendance_overview_view, name='attendance-base-overview'),
+    path('events/<int:event_id>/base-attendance/<int:tenant_id>/', attendance_views.tenant_attendance_detail_view, name='attendance-tenant-detail'),
+    path('events/<int:event_id>/base-attendance/<int:tenant_id>/update/', attendance_views.add_or_update_base_attendance_view, name='attendance-add-base'),
+    
+    path('sessions/<int:session_id>/start/', attendance_views.start_session_part_view, name='attendance-start-session'),
+    path('sessions/<int:session_id>/stop/', attendance_views.stop_session_view, name='attendance-stop-session'),
+    path('sessions/<int:session_id>/toggle-status/', attendance_views.toggle_session_status_view, name='attendance-toggle-session-status'),
+    path('sessions/<int:session_id>/delete/', attendance_views.delete_session_view, name='attendance-delete-session'),
+    path('sessions/<int:session_id>/current-token/', attendance_views.get_current_qr_token_view, name='attendance-current-token'),
+    path('sessions/<int:session_id>/report/', attendance_views.attendance_report_view, name='attendance-report'),
+    path('sessions/<int:session_id>/override/', attendance_views.manual_override_view, name='attendance-override'),
+    
+    path('scan/', attendance_views.scan_attendance_view, name='attendance-scan'),
+    path('my-history/', attendance_views.my_attendance_history_view, name='attendance-my-history'),
+]
+
+# Print & Scan URLs (for Pi and Department)
+printing_urlpatterns = [
+    # Pi endpoints (no auth)
+    path('active-session/', printing_views.active_session_view, name='printing-active-session'),
+    path('scans/', printing_views.upload_scan_view, name='printing-upload-scan'),
+    # Department management endpoints
+    path('tenant-billing-overview/', printing_views.tenant_billing_overview_view, name='printing-tenant-billing-overview'),
+    path('device/<int:device_id>/overview/', printing_views.device_overview_view, name='printing-device-overview'),
+    path('device/<int:device_id>/statistics/', printing_views.device_statistics_view, name='printing-device-statistics'),
+    path('device/<int:device_id>/settings/', printing_views.device_settings_update_view, name='printing-device-settings'),
+    path('device/<int:device_id>/toggle-active/', printing_views.device_toggle_active_view, name='printing-device-toggle-active'),
+    path('device/<int:device_id>/toggle-sessions/', printing_views.device_toggle_sessions_view, name='printing-device-toggle-sessions'),
+    path('device/<int:device_id>/terminate-session/', printing_views.device_terminate_session_view, name='printing-device-terminate-session'),
+    path('device/<int:device_id>/history/', printing_views.device_history_view, name='printing-device-history'),
+    path('tenant/<int:tenant_id>/settle-debt/', printing_views.settle_tenant_debt_view, name='printing-tenant-settle-debt'),
+]
+
 urlpatterns = [
-    path('', TemplateView.as_view(template_name="home.html")),
-    path('tenant-dashboard/', tenant_dashboard, name='tenant_dashboard'),
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
     path('api/tenants/', include((tenant_urlpatterns, 'tenants'))),
     path('api/engagements/', include((engagement_urlpatterns, 'engagements'))),
     path('api/department/', include((department_urlpatterns, 'department'))),
-    path('api/admin/', include((admin_urlpatterns, 'admin'))),
     path('api/common/', include((common_urlpatterns, 'common'))),
+    path('api/attendance/', include((attendance_urlpatterns, 'attendance'))),
+    path('api/printing/', include((printing_urlpatterns, 'printing'))),
 ]

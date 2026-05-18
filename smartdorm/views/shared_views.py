@@ -87,7 +87,7 @@ def departments_for_select_view(request):
     API endpoint to retrieve a list of all departments for select dropdowns.
     """
     try:
-        departments = Department.objects.all().order_by('name')
+        departments = Department.objects.filter(size__gt=0).order_by('name')
         serializer = DepartmentSerializer(departments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:

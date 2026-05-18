@@ -3,7 +3,16 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-logger = logging.getLogger(__name__) 
+from decimal import Decimal
+import uuid
+
+logger = logging.getLogger(__name__)
+
+
+def generate_external_id():
+    """Generate a unique external ID (UUID hex)"""
+    return uuid.uuid4().hex
+
 class Tenant(models.Model):
     id = models.IntegerField(primary_key=True)
     birthday = models.DateField()
@@ -83,7 +92,7 @@ class Rental(models.Model):
     move_in = models.DateField()
     moved_out = models.DateField()
     room = models.ForeignKey(Room, on_delete=models.DO_NOTHING, db_column='room_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
 
     class Meta:
         db_table = 't_rental'
@@ -108,7 +117,7 @@ class Engagement(models.Model):
     points = models.DecimalField(max_digits=19, decimal_places=2)
     semester = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.DO_NOTHING, db_column='department_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
 
     class Meta:
         db_table = 't_engagement'
@@ -120,7 +129,7 @@ class EngagementApplication(models.Model):
     motivation = models.TextField()
     external_id = models.CharField(max_length=255)
     department = models.ForeignKey(Department, on_delete=models.DO_NOTHING, db_column='department_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
     image_name = models.CharField(max_length=255, null=True, blank=True)
     image = models.BinaryField(null=True, blank=True)
 
@@ -134,7 +143,7 @@ class Departure(models.Model):
         POSTPONED = 'POSTPONED', 'Verlängert'
         CONFIRMED = 'CONFIRMED', 'Bestätigt'
         CLOSED = 'CLOSED', 'Abgeschlossen'
-    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE, db_column='tenant_id')
     created_on = models.DateField()
     external_id = models.CharField(max_length=255)
     status = models.CharField(max_length=255, choices=Status.choices, default=Status.CREATED) # 'POSTPONED', 'CREATED', 'CLOSED', 'CONFIRMED'
@@ -149,7 +158,7 @@ class DepartmentSignature(models.Model):
     department_name = models.CharField(max_length=30)
     external_id = models.CharField(max_length=255)
     signed_on = models.DateField()
-    departure = models.ForeignKey(Departure, on_delete=models.DO_NOTHING, db_column='departure_id')
+    departure = models.ForeignKey(Departure, on_delete=models.CASCADE, db_column='departure_id')
 
     class Meta:
         db_table = 't_department_signature'
@@ -162,8 +171,8 @@ class Parcel(models.Model):
     external_id = models.CharField(max_length=255)
     picked_up = models.DateTimeField(null=True, blank=True)
     registered = models.BooleanField()
-    tenant = models.ForeignKey('Tenant', null=True, blank=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
-    subtenant = models.ForeignKey('Subtenant', null=True, blank=True, on_delete=models.DO_NOTHING, db_column='subtenant_id')
+    tenant = models.ForeignKey('Tenant', null=True, blank=True, on_delete=models.CASCADE, db_column='tenant_id')
+    subtenant = models.ForeignKey('Subtenant', null=True, blank=True, on_delete=models.CASCADE, db_column='subtenant_id')
 
     class Meta:
         db_table = 't_parcel'
@@ -177,7 +186,7 @@ class Subtenant(models.Model):
     move_out = models.DateField()
     university_confirmation = models.BooleanField()
     room = models.ForeignKey(Room, on_delete=models.DO_NOTHING, db_column='room_id')
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
     name = models.CharField(max_length=255)
     surname = models.CharField(max_length=255)
     email = models.CharField(max_length=255)
@@ -197,7 +206,7 @@ class User(models.Model):
         managed = False
 
 class DepositBank(models.Model):
-    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE, db_column='tenant_id')
     name = models.CharField(max_length=255)
     iban = models.CharField(max_length=255)
 
@@ -220,7 +229,7 @@ class Claim(models.Model):
     external_id = models.CharField(max_length=255)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.CREATED)
     type = models.CharField(max_length=20, choices=Type.choices)
-    tenant = models.ForeignKey('Tenant', on_delete=models.DO_NOTHING, db_column='tenant_id')
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id')
 
     class Meta:
         db_table = 't_claim'
@@ -244,6 +253,36 @@ class OfflineUserPermissions(models.Model):
     class Meta:
         db_table = 'offline_user_permissions'
         managed = False
+        
+class Termination(models.Model):
+    """
+    Represents a hard termination of a contract.
+    If this exists for a tenant, it overrides all other calculation logic.
+    """
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE, db_column='tenant_id', related_name='termination_record')
+    date = models.DateField()
+    note = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_termination'
+        managed = True 
+
+class DepartmentExtension(models.Model):
+    """
+    Represents ad-hoc extensions (or reductions) granted by the department.
+    Months can be negative to reduce the contract duration.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id', related_name='department_extensions')
+    months = models.IntegerField(help_text="Number of months to extend (positive) or reduce (negative)")
+    note = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_department_extension'
+        managed = True 
         
 class GlobalAppSettings(models.Model):
     # Singleton model: there should only be one instance of this model.
@@ -298,4 +337,213 @@ class GlobalAppSettings(models.Model):
         obj, created = cls.objects.get_or_create(pk=1)
         if created:
             logger.info("Initialized new GlobalAppSettings singleton instance (id=1) with default values.")
+
         return obj
+
+class Event(models.Model):
+    """
+    Represents a generic, recurring event type (e.g., "General Assembly", "Bar Duty").
+    Configured in settings by the Network department.
+    """
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    parts_count = models.IntegerField(default=1, help_text="How many parts one attendance tracking session can have")
+    required_parts = models.IntegerField(default=1, help_text="How many parts are required to count as attended")
+    admin_groups = models.JSONField(default=list, help_text="List of LDAP groups that can manage this event. 'ADMIN' always has permission.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 't_event'
+        managed = True
+
+class AttendanceSession(models.Model):
+    """
+    Represents a single occurrence of an Event on a specific date (e.g., General Assembly on 2026-04-12).
+    """
+    id = models.AutoField(primary_key=True)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='sessions')
+    title = models.CharField(max_length=255, blank=True, default="", help_text="Optional custom session name")
+    date = models.DateField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20, 
+        choices=[('CREATED', 'Created'), ('ACTIVE', 'Active'), ('CLOSED', 'Closed')],
+        default='CREATED'
+    )
+    current_part = models.IntegerField(default=0, help_text="The currently active part (1 to parts_count). 0 means none active.")
+    secret_token = models.CharField(max_length=64, null=True, blank=True)
+    previous_secret_token = models.CharField(max_length=64, null=True, blank=True)
+    last_rotated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 't_attendance_session'
+        managed = True
+
+class AttendanceRecord(models.Model):
+    """
+    Records a tenant's attendance for a specific part of an AttendanceSession.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='attendance_records')
+    session = models.ForeignKey(AttendanceSession, on_delete=models.CASCADE, related_name='records')
+    part = models.IntegerField(help_text="Which part of the session (e.g., 1, 2, 3) this record applies to")
+    timestamp = models.DateTimeField(auto_now_add=True)
+    is_manual_override = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 't_attendance_record'
+        managed = True
+        unique_together = ('tenant', 'session', 'part')
+
+
+class BaseAttendanceRecord(models.Model):
+    """
+    Records manually added base attendance for a tenant at an event.
+    This allows migration from the old Excel-based attendance system.
+    
+    Note: The 'parts_count' field stores the number of SESSIONS attended in the old system,
+    not the number of parts within a session.
+    """
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='base_attendance_records')
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='base_attendance_records')
+    parts_count = models.IntegerField(help_text="Number of sessions attended in the old system (stored as 'parts_count' for database compatibility)")
+    note = models.TextField(null=True, blank=True, help_text="Reason for adding base attendance")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_base_attendance_record'
+        managed = True
+        unique_together = ('tenant', 'event')
+
+# ============================================================================
+# Print & Scan System Models
+
+class Device(models.Model):
+    """Represents a printer/scanner"""
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255, help_text="Name of the printer (e.g. Samsung Xpress C1860FW)")
+    location = models.CharField(max_length=255, help_text="Location (e.g. Creative Department Room)")
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, help_text="Responsible department")
+    is_active = models.BooleanField(default=True, help_text="Global on/off")
+    allow_new_sessions = models.BooleanField(default=True, help_text="Allow new sessions")
+    price_per_page_color = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.10'), help_text="Price per color page in Euro")
+    price_per_page_gray = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.05'), help_text="Price per black & white page in Euro")
+    max_session_duration_minutes = models.IntegerField(default=30, help_text="Maximum session duration in minutes")
+    cups_printer_name = models.CharField(max_length=255, help_text="Name of the printer in CUPS (e.g. Samsung_C1860_Series)")
+    ip_address = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="IP address or hostname of the Raspberry Pi running CUPS and the scan service (e.g. 10.50.0.15). Falls back to CUPS_SERVER setting when empty.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_device'
+        verbose_name = "Device"
+        verbose_name_plural = "Devices"
+
+    def __str__(self):
+        return f"{self.name} ({self.location})"
+
+class PrintSession(models.Model):
+    """Active or past print/scan sessions"""
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        COMPLETED = 'COMPLETED', 'Completed'
+        EXPIRED = 'EXPIRED', 'Expired'
+        TERMINATED = 'TERMINATED', 'Terminated'
+    
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_print_session'
+        verbose_name = "Print Session"
+        verbose_name_plural = "Print Sessions"
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f"Session {self.external_id[:8]} - {self.tenant.get_full_name()} ({self.status})"
+
+class PrintJob(models.Model):
+    """Individual print jobs"""
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PRINTING = 'PRINTING', 'Printing'
+        COMPLETED = 'COMPLETED', 'Completed'
+        FAILED = 'FAILED', 'Failed'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+    
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(PrintSession, on_delete=models.CASCADE, db_column='session_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    filename = models.CharField(max_length=255)
+    color_mode = models.CharField(max_length=10, default='Color', choices=[('Color', 'Color'), ('Gray', 'Gray')], help_text="Color mode used for this job")
+    pages = models.IntegerField(null=True, blank=True, help_text="Number of printed pages (updated after printing)")
+    cost = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Cost in Euro (only for COMPLETED)")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this job was settled/paid by administration. NULL = still outstanding."
+    )
+    error_message = models.TextField(null=True, blank=True)
+    cups_job_id = models.CharField(max_length=255, null=True, blank=True, help_text="CUPS Job ID for status query")
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_print_job'
+        verbose_name = "Print Job"
+        verbose_name_plural = "Print Jobs"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Job {self.external_id[:8]} - {self.filename} ({self.status})"
+    
+    def save(self, *args, **kwargs):
+        # Calculate cost only for COMPLETED, otherwise 0
+        if self.status == 'COMPLETED' and self.pages and self.device:
+            # Use color or gray price depending on color_mode
+            if self.color_mode == 'Color':
+                price_per_page = self.device.price_per_page_color
+            else:
+                price_per_page = self.device.price_per_page_gray
+            self.cost = Decimal(str(self.pages)) * price_per_page
+            # Log the calculation for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"PrintJob.save() calculated cost: pages={self.pages}, color_mode={self.color_mode}, price_per_page={price_per_page}, cost={self.cost}")
+        elif self.status != 'COMPLETED':
+            self.cost = Decimal('0.00')
+        super().save(*args, **kwargs)
+
+class Scan(models.Model):
+    """Scanned documents (temporarily stored)"""
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(PrintSession, on_delete=models.CASCADE, db_column='session_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    filename = models.CharField(max_length=255)
+    file_path = models.CharField(max_length=500, help_text="Relative path to temporary storage (scans/temp/session_XXX/...)")
+    scanned_at = models.DateTimeField(auto_now_add=True)
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_scan'
+        verbose_name = "Scan"
+        verbose_name_plural = "Scans"
+        ordering = ['-scanned_at']
+
+    def __str__(self):
+        return f"Scan {self.external_id[:8]} - {self.filename}"

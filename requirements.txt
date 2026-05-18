@@ -19,3 +19,5 @@ reportlab
 python-dateutil
 pypdf
 requests
+passlib
+pycups

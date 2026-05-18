@@ -1,4 +1,6 @@
 import json
+import secrets
+import string
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
@@ -10,6 +12,13 @@ from rest_framework.response import Response
 from rest_framework import status
 from pprint import pprint
 from django.contrib.auth.models import User
+from ..models import Tenant
+from ..utils.email_utils import send_email_message
+from ..utils.ldap_utils import update_ldap_password, find_ldap_user_by_email
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Helper function to build the user data object
 def get_user_data(user):
     if not user or not user.is_authenticated:
@@ -80,6 +89,160 @@ def me_view(request):
         return Response({"authenticated": True, "user": user_data}, status=status.HTTP_200_OK)
     else:
         return Response({"authenticated": False, "message": "User authenticated but data unavailable"}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@authentication_classes([SessionAuthentication])
+def password_reset_view(request):
+    """
+    Reset password for a user by email.
+    Generates a new 12-character password, updates it in LDAP, and sends it via email.
+    """
+    try:
+        email = request.data.get('email')
+        if not email:
+            return Response(
+                {"success": False, "message": "Email address is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Find user by email in LDAP 
+        try:
+            username, full_name = find_ldap_user_by_email(email)
+            if not username:
+                # Don't reveal if email exists or not for security
+                return Response(
+                    {"success": True, "message": "Falls die E-Mail-Adresse existiert, wurde eine Passwort-Reset-E-Mail gesendet."}, 
+                    status=status.HTTP_200_OK
+                )
+            
+            # Try to get greeting from Tenant model, fallback to LDAP full_name
+            try:
+                tenant = Tenant.objects.get(email=email)
+                greeting = tenant.name  
+            except Tenant.DoesNotExist:
+                greeting = full_name or username  # Fallback to LDAP data
+                
+        except Exception as e:
+            logger.error(f"Error during LDAP user search for email '{email}': {e}")
+            # Don't reveal if email exists or not for security
+            return Response(
+                {"success": True, "message": "Falls die E-Mail-Adresse existiert, wurde eine Passwort-Reset-E-Mail gesendet."}, 
+                status=status.HTTP_200_OK
+            )
+
+        # Generate a secure 12-character password (only after LDAP user was found)
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        new_password = ''.join(secrets.choice(alphabet) for _ in range(12))
+
+        # Update password in LDAP
+        try:
+            update_ldap_password(username, new_password)
+        except Exception as e:
+            logger.error(f"Failed to update LDAP password for user {username}: {e}")
+            return Response(
+                {"success": False, "message": "Failed to reset password. Please contact support."}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # Send email with new password
+        email_context = {
+            'greeting': greeting,
+            'username': username,
+            'password': new_password,
+        }
+
+        email_sent = send_email_message(
+            recipient_list=[email],
+            subject="SmartDorm - Passwort zurückgesetzt",
+            html_template_name="email/user-password-reset.html",
+            context=email_context
+        )
+
+        if email_sent:
+            return Response(
+                {"success": True, "message": "Passwort-Reset-E-Mail erfolgreich gesendet."}, 
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(
+                {"success": False, "message": "Failed to send password reset email. Please contact support."}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    except Exception as e:
+        logger.error(f"Password reset error: {e}")
+        return Response(
+            {"success": False, "message": "An error occurred during password reset."}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def password_change_view(request):
+    """
+    Change password for authenticated user.
+    Requires old password verification and new password confirmation.
+    """
+    try:
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        confirm_password = request.data.get('confirm_password')
+        
+        if not old_password or not new_password or not confirm_password:
+            return Response(
+                {"success": False, "message": "Alle Felder sind erforderlich."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if new_password != confirm_password:
+            return Response(
+                {"success": False, "message": "Die neuen Passwörter stimmen nicht überein."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if len(new_password) < 8:
+            return Response(
+                {"success": False, "message": "Das neue Passwort muss mindestens 8 Zeichen lang sein."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if old_password == new_password:
+            return Response(
+                {"success": False, "message": "Das neue Passwort muss sich vom aktuellen Passwort unterscheiden."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify old password
+        user = authenticate(request, username=request.user.username, password=old_password)
+        if user is None:
+            return Response(
+                {"success": False, "message": "Das aktuelle Passwort ist falsch."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update password in LDAP
+        try:
+            update_ldap_password(request.user.username, new_password)
+            logger.info(f"Password successfully changed for user: {request.user.username}")
+            return Response(
+                {"success": True, "message": "Passwort erfolgreich geändert."}, 
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            logger.error(f"Failed to update LDAP password for user {request.user.username}: {e}")
+            return Response(
+                {"success": False, "message": "Fehler beim Ändern des Passworts. Bitte versuchen Sie es später erneut."}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+    except Exception as e:
+        logger.error(f"Password change error: {e}")
+        return Response(
+            {"success": False, "message": "Ein Fehler ist aufgetreten."}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 # --- Example Protected View ---
 #

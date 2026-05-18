@@ -16,10 +16,10 @@ from dateutil.relativedelta import relativedelta
 import re
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank
-from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer
+from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
+from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
-from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures
+from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
 
 import logging
@@ -90,11 +90,18 @@ def get_tenant_detail_view(request, tenant_id):
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
 def update_tenant_view(request, tenant_id):
     update_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     update_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # Store old values to detect changes
+    old_email = tenant.email
+    old_name = tenant.name
+    old_surname = tenant.surname
+    
     # Exclude non-editable fields from the request data before validation
     request.data.pop('current_room', None)
     request.data.pop('move_in', None)
@@ -102,6 +109,36 @@ def update_tenant_view(request, tenant_id):
     serializer = TenantSerializer(tenant, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
+        
+        # Check if email, name, or surname changed and update LDAP
+        if tenant.username and (
+            tenant.email != old_email or 
+            tenant.name != old_name or 
+            tenant.surname != old_surname
+        ):
+            try:
+                name_changed = tenant.name != old_name
+                surname_changed = tenant.surname != old_surname
+                
+                ldap_utils.update_ldap_user_attributes(
+                    username=tenant.username,
+                    email=tenant.email if tenant.email != old_email else None,
+                    first_name=tenant.name if name_changed else None,
+                    last_name=tenant.surname if surname_changed else None
+                )
+                logger.info(f"Successfully updated LDAP attributes for tenant '{tenant.username}'")
+            except (ValueError, ConnectionError) as e:
+                logger.error(f"Failed to update LDAP for tenant '{tenant.username}': {e}", exc_info=True)
+                # Log warning but don't fail the entire operation - DB was successfully updated
+                return Response(
+                    {
+                        "message": "Tenant updated successfully, but LDAP sync failed. Manual synchronization may be needed.",
+                        "data": serializer.data,
+                        "ldap_error": str(e)
+                    },
+                    status=status.HTTP_200_OK
+                )
+        
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -159,6 +196,84 @@ def list_tenant_rentals_view(request, tenant_id):
     serializer = RentalSerializer(rentals, many=True)
     return Response(serializer.data)
 
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def delete_rental_view(request, rental_id):
+    """
+    Deletes a rental record, effectively undoing a wrongly-done tenant move.
+    - Restores the previous rental's move-out date to the deleted rental's move-out date.
+    - Updates the tenant's current_room and current_floor from the latest remaining rental.
+    - Updates LDAP floor groups if the floor changes.
+    - Returns an error if deleting would leave the tenant with no rental records.
+    """
+    delete_rental_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    delete_rental_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    rental = get_object_or_404(Rental.objects.select_related('room', 'tenant'), id=rental_id)
+    tenant = rental.tenant
+
+    # Guard: tenant must always have at least one rental
+    rental_count = Rental.objects.filter(tenant=tenant).count()
+    if rental_count <= 1:
+        return Response(
+            {"error": "Cannot delete this rental: the tenant must have at least one rental record."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Find the rental that was "closed" when this move was created.
+    # move_tenant_view sets previous rental's moved_out = move_date - 1 day,
+    # so we look for a rental ending the day before this rental's move_in.
+    previous_rental = Rental.objects.filter(
+        tenant=tenant,
+        moved_out=rental.move_in - timedelta(days=1)
+    ).exclude(id=rental.id).first()
+
+    if previous_rental:
+        # Restore the previous rental's end date to match the one being deleted
+        previous_rental.moved_out = rental.moved_out
+        previous_rental.save()
+        logger.info(
+            f"Restored rental {previous_rental.id} moved_out to {previous_rental.moved_out} "
+            f"after deleting rental {rental.id} for tenant {tenant.username}."
+        )
+
+    rental.delete()
+
+    # Update tenant's denormalized room/floor from the latest remaining rental
+    latest_rental = Rental.objects.filter(tenant=tenant).select_related('room').order_by('-move_in').first()
+    old_floor = tenant.current_floor
+    new_floor = latest_rental.room.floor
+
+    tenant.current_room = latest_rental.room.name
+    tenant.current_floor = new_floor
+    tenant.save()
+
+    # Update LDAP floor groups if the floor changed
+    try:
+        if old_floor != new_floor:
+            group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+            if old_floor:
+                old_group_dn = f"cn={old_floor},{group_base_dn}"
+                ldap_utils.remove_user_from_group(tenant.username, old_group_dn)
+                logger.info(f"Removed user '{tenant.username}' from LDAP group for floor '{old_floor}'.")
+            if new_floor:
+                new_group_dn = f"cn={new_floor},{group_base_dn}"
+                ldap_utils.add_user_to_group(tenant.username, new_group_dn)
+                logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+    except Exception as e:
+        logger.error(
+            f"Error updating LDAP groups for tenant '{tenant.username}' during rental deletion: {e}",
+            exc_info=True
+        )
+
+    return Response(
+        {"message": f"Rental deleted. Tenant's current room updated to '{tenant.current_room}'."},
+        status=status.HTTP_200_OK
+    )
+
+
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
@@ -174,6 +289,8 @@ def move_tenant_view(request, tenant_id):
     data = serializer.validated_data
     tenant = get_object_or_404(Tenant, id=tenant_id)
     new_room = get_object_or_404(Room, id=data['room_id'])
+    new_floor = new_room.floor
+    old_floor = tenant.current_floor
     move_date = data['move_date']
 
     # Find the current rental agreement to end it
@@ -208,6 +325,21 @@ def move_tenant_view(request, tenant_id):
     
     logger.info(f"Tenant {tenant.username} moved from room {current_rental.room.name} to {new_room.name} on {move_date}.")
 
+    #Update floor LDAP group
+    try:
+        if old_floor != new_floor:
+            group_base_dn = "ou=groups2,dc=schollheim,dc=net"
+            if old_floor:
+                old_group_dn = f"cn={old_floor},{group_base_dn}"
+                ldap_utils.remove_user_from_group(tenant.username, old_group_dn)
+                logger.info(f"Removed user '{tenant.username}' from LDAP group for floor '{old_floor}'.")
+            new_group_dn = f"cn={new_floor},{group_base_dn}"
+            ldap_utils.add_user_to_group(tenant.username, new_group_dn)
+            logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+    except Exception as e:
+        logger.error(f"Error updating LDAP groups for tenant '{tenant.username}' during move: {e}", exc_info=True)
+    
+
     return Response(TenantSerializer(tenant).data, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
@@ -226,25 +358,31 @@ def create_new_tenant_view(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     data = serializer.validated_data
+    room = get_object_or_404(Room, name=data['current_room'])
+    floor = room.floor
 
     # 1. Generate unique username and a secure password
     base_username = (data['name'][0] + "." + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss')
     username = base_username
     counter = 1
-    while Tenant.objects.filter(username=username).exists():
+    while ldap_utils.ldap_username_exists(username) or Tenant.objects.filter(username=username).exists():
         username = f"{base_username}{counter}"
         counter += 1
+    print(f"Generated unique username: {username}")
     password = generate_secure_password()
 
     # 2. Create user in LDAP
     try:
+        ldap_groups = app_config.DEFAULT_TENANT_LDAP_GROUPS
+        #Add the users FLOOR as a LDAP group
+        ldap_groups.append(f"cn={floor},ou=groups2,dc=schollheim,dc=net")
         ldap_utils.create_ldap_user(
             username=username,
             password=password,
             first_name=data['name'],
             last_name=data['surname'],
             email=data['email'],
-            group_dns=app_config.DEFAULT_TENANT_LDAP_GROUPS
+            group_dns=ldap_groups
         )
     except (ValueError, ConnectionError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -256,8 +394,6 @@ def create_new_tenant_view(request):
         
         probation_end_date = data['move_in'] + timedelta(days=app_config.PROBATION_PERIOD_DAYS)
         move_out_date = data['move_in'] + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
-        room = get_object_or_404(Room, name=data['current_room'])
-        floor = room.floor
         
         tenant = Tenant.objects.create(
             id=new_id,
@@ -361,14 +497,19 @@ def create_subtenant_view(request):
     
     password = generate_secure_password()
     
-    try:
-        ldap_utils.create_ldap_user(
-            username=username, password=password, first_name=data['name'],
-            last_name=data['surname'], email=data['email'],
-            group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS
-        )
-    except (ValueError, ConnectionError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    #Determin if there was already a subtenant with the same username and skip ldap user creation if so
+    is_new_subtenant = not Subtenant.objects.filter(name=data['name'], surname=data['surname']).exists()
+         
+    if is_new_subtenant:
+        try:
+            ldap_utils.create_ldap_user(
+                username=username, password=password, first_name=data['name'],
+                last_name=data['surname'], email=data['email'],
+                group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS,
+                userType="SUBTENANT"
+            )
+        except (ValueError, ConnectionError) as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
         max_id_result = Subtenant.objects.aggregate(max_id=Max('id'))
@@ -383,23 +524,24 @@ def create_subtenant_view(request):
         )
         
         # Update the main tenant's sublet count and adjust dates
-        update_tenant_data_from_subtenant_change(subtenant)
+        recalculate_tenant_contract_dates(subtenant.tenant)
             
     except Exception as e:
         logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
         return Response({"error": "Failed to save subtenant to database after creating auth entry."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    email_context = {
-        'greeting': f"Hallo {data['name']}",
-        'username': username, 'password': password,
-    }
-    email_sent = email_utils.send_email_message(
-        recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
-        html_template_name='email/user-account-creation-subtenant.html',
-        context=email_context
-    )
-    if not email_sent:
-        logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+    if is_new_subtenant:
+        email_context = {
+            'greeting': f"Hallo {data['name']}",
+            'username': username, 'password': password,
+        }
+        email_sent = email_utils.send_email_message(
+            recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
+            html_template_name='email/user-account-creation-subtenant.html',
+            context=email_context
+        )
+        if not email_sent:
+            logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
 
     return Response(SubtenantSerializer(subtenant).data, status=status.HTTP_201_CREATED)
 
@@ -464,30 +606,11 @@ def update_subtenant_view(request, subtenant_id):
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
-        # Update the main tenant's sublet count and adjust dates if relevant fields changed
-        update_tenant_data_from_subtenant_change(subtenant)
+        
+        recalculate_tenant_contract_dates(subtenant.tenant)
+        
         return Response(SubtenantSerializer(subtenant).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-def update_tenant_data_from_subtenant_change(subtenant):
-    """
-    Updates the main tenant's sublet count and adjusts move_out and probation_end dates
-    based on the current subtenants with university confirmation.
-    """
-    main_tenant = get_object_or_404(Tenant, id=subtenant.tenant_id)
-    
-    # Calculate the sublets and the sublet duration from all sublets of the tenant that have a university confirmation
-    sublets = Subtenant.objects.filter(tenant_id=main_tenant.id, university_confirmation=True)
-    main_tenant.sublet = sublets.count()
-    sublet_duration = sum((s.move_out - s.move_in).days for s in sublets)
-    
-    # Update move_out and probation_end dates
-    main_tenant.move_out += timedelta(days=sublet_duration)
-    if main_tenant.probation_end > subtenant.move_in:
-        main_tenant.probation_end += timedelta(days=sublet_duration)
-    
-    main_tenant.save()
-    logger.info(f"Updated main tenant '{main_tenant.username}' sublet count to {main_tenant.sublet} and adjusted move_out to {main_tenant.move_out} due to subtenant change.")
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
@@ -508,6 +631,7 @@ def delete_subtenant_view(request, subtenant_id):
     try:
         ldap_utils.delete_ldap_user(username_to_delete)
         subtenant.delete()
+        recalculate_tenant_contract_dates(tenant)
         logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
         return Response(status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
@@ -780,6 +904,24 @@ def send_departure_reminder_view(request, departure_id):
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 @transaction.atomic
+def revert_departure_view(request, departure_id):
+    revert_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    revert_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
+    
+    tenant = departure.tenant
+    
+    DepositBank.objects.filter(tenant=tenant).delete()
+    departure.delete()
+
+    return Response({"message": "Auszug erfolgreich abgebrochen."}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
 def close_departure_view(request, departure_id):
     close_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     close_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
@@ -978,17 +1120,18 @@ def process_claim_decision_view(request, claim_id):
         claim.save()
         
         tenant.extension = (tenant.extension or 0) + 1
+        tenant.save()
         
         new_move_out_date_str = request.data.get('move_out_date')
         if new_move_out_date_str:
             try:
                 tenant.move_out = date.fromisoformat(new_move_out_date_str)
+                tenant.save()
             except (ValueError, TypeError):
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            tenant.move_out += timedelta(days=app_config.DEFAULT_EXTENSION_DURATION_DAYS)
-        
-        tenant.save()
+            recalculate_tenant_contract_dates(tenant)
+
         Departure.objects.filter(tenant=tenant).delete()
         
         #Send email to tenant
@@ -1005,3 +1148,184 @@ def process_claim_decision_view(request, claim_id):
         return Response({"message": "Claim approved, tenant extended, and departure deleted."}, status=status.HTTP_200_OK)
 
     return Response({"error": "Invalid decision. Must be 'APPROVED' or 'REJECTED'."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+# --- TERMINATION MANAGEMENT ---
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def terminate_tenant_view(request, tenant_id):
+    """
+    Terminates a tenant's contract effective from a specified move_out_date.
+    Creates a Termination record and updates the tenant's move_out date via recalculation.
+    """
+    terminate_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    terminate_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    serializer = TenantTerminationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    data = serializer.validated_data
+    move_out_date = data['move_out_date']
+    note = request.data.get('note', 'Manually terminated via API')
+    
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # 1. Create or Update Termination Record
+    Termination.objects.update_or_create(
+        tenant=tenant,
+        defaults={
+            'date': move_out_date,
+            'note': note
+        }
+    )
+    logger.info(f"Termination record created/updated for tenant {tenant.username} at {move_out_date}.")
+
+    # 2. Recalculate dates (This will apply the termination date to the tenant model)
+    recalculate_tenant_contract_dates(tenant)
+
+    # 3. Handle Departure Logic
+    # Check if a departure process is already active. If so delete it to reset state.
+    if Departure.objects.filter(tenant=tenant).exists():
+        Departure.objects.filter(tenant=tenant).delete()
+        logger.info(f"Existing departure for tenant {tenant.username} deleted before creating a new one.")
+
+    # Create a confirmed departure record
+    departure = Departure.objects.create(
+        tenant=tenant,
+        external_id=uuid.uuid4().hex,
+        created_on=timezone.now().date(),
+        status=Departure.Status.CONFIRMED
+    )
+    
+    # Initiate the signature process
+    create_and_notify_departure_signatures(departure)
+    
+    # Notify the tenant
+    email_utils.send_email_message(
+        recipient_list=[tenant.email],
+        subject="Dein Wohnvertrag im Schollheim wurde gekündigt",
+        html_template_name='email/tenant-departure-termination.html',
+        context={
+            'greeting': tenant.name,
+            'departureDate': tenant.move_out.strftime('%d.%m.%Y')
+        }
+    )
+    
+    #Check if tenant has claims and set them to rejected
+    claims_updated = Claim.objects.filter(tenant=tenant, status__in=[Claim.Status.CREATED, Claim.Status.PROCESSING]).update(status=Claim.Status.REJECTED)
+    logger.info(f"Claims updated to REJECTED for tenant {tenant.username}: {claims_updated}")
+    
+    return Response(
+        {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
+        status=status.HTTP_200_OK
+    )
+
+@api_view(['GET', 'DELETE'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def manage_termination_view(request, tenant_id):
+    """
+    GET: Retrieve termination info for a tenant.
+    DELETE: Remove a termination (revoking the firing), triggers recalculation.
+    """
+    manage_termination_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    manage_termination_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+
+    if request.method == 'GET':
+        try:
+            termination = tenant.termination_record
+            return Response(TerminationSerializer(termination).data)
+        except Termination.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND) # No termination exists
+
+    if request.method == 'DELETE':
+        try:
+            termination = tenant.termination_record
+            termination.delete()
+            # Important: Recalculate dates to restore original contract length
+            # Check if the tenant already has a departure record, if so we need to delete it since the tenant is not fired anymore (we also need to delete the signature ascociated with the departure)
+            if Departure.objects.filter(tenant=tenant).exists():
+                Departure.objects.filter(tenant=tenant).delete()
+                logger.info(f"Departure record deleted for tenant {tenant.username} due to termination revocation.")
+            changes = recalculate_tenant_contract_dates(tenant)
+            logger.info(f"Termination revoked for {tenant.username}. Changes: {changes}")
+            return Response({"message": "Termination revoked. Contract dates recalculated."}, status=status.HTTP_204_NO_CONTENT)
+        except Termination.DoesNotExist:
+            return Response({"error": "No termination found to delete."}, status=status.HTTP_404_NOT_FOUND)
+
+
+# --- DEPARTMENT EXTENSION MANAGEMENT ---
+
+@api_view(['GET', 'POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def manage_department_extensions_view(request, tenant_id=None):
+    """
+    GET: List all extensions for a specific tenant (requires tenant_id in URL).
+    POST: Create a new extension.
+    """
+    manage_department_extensions_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    manage_department_extensions_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    if request.method == 'GET':
+        if not tenant_id:
+            return Response({"error": "Tenant ID required for listing."}, status=status.HTTP_400_BAD_REQUEST)
+        extensions = DepartmentExtension.objects.filter(tenant_id=tenant_id).order_by('-created_at')
+        return Response(DepartmentExtensionSerializer(extensions, many=True).data)
+
+    if request.method == 'POST':
+        serializer = DepartmentExtensionCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        t_id = serializer.validated_data['tenant_id']
+        tenant = get_object_or_404(Tenant, id=t_id)
+        
+        DepartmentExtension.objects.create(
+            tenant=tenant,
+            months=serializer.validated_data['months'],
+            note=serializer.validated_data.get('note')
+        )
+        
+        # Recalculate contract dates
+        changes = recalculate_tenant_contract_dates(tenant)
+        logger.info(f"Department extension added for {tenant.username}. Changes: {changes}")
+        
+        return Response({"message": "Extension added and contract recalculated."}, status=status.HTTP_201_CREATED)
+
+@api_view(['DELETE', 'PUT'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
+def update_department_extension_view(request, extension_id):
+    """
+    DELETE: Remove a specific extension.
+    PUT: Update months/note.
+    """
+    update_department_extension_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    update_department_extension_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    extension = get_object_or_404(DepartmentExtension, id=extension_id)
+    tenant = extension.tenant
+
+    if request.method == 'DELETE':
+        extension.delete()
+        changes = recalculate_tenant_contract_dates(tenant)
+        return Response({"message": "Extension deleted and contract recalculated."}, status=status.HTTP_204_NO_CONTENT)
+    
+    if request.method == 'PUT':
+        # Simple update of note or months
+        extension.months = request.data.get('months', extension.months)
+        extension.note = request.data.get('note', extension.note)
+        extension.save()
+        changes = recalculate_tenant_contract_dates(tenant)
+        return Response(DepartmentExtensionSerializer(extension).data)

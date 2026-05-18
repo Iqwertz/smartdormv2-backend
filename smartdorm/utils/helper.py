@@ -1,15 +1,19 @@
 import secrets
 import string
 from decimal import Decimal
-from datetime import date
+import calendar
+from datetime import timedelta, date
 import uuid
 import logging
 import re
+from dateutil.relativedelta import relativedelta
 
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Sum
+from django.utils import timezone
+from django.core.exceptions import ObjectDoesNotExist
 
-from ..models import DepartmentSignature, Departure
+from ..models import DepartmentSignature, Departure, Subtenant, DepartmentExtension, Termination
 from .. import config as app_config
 from ..utils import email_utils
 
@@ -238,3 +242,214 @@ def create_and_notify_departure_signatures(departure):
     # Will be removed (hopefully) when the new smartdorm is fully used, since then all departures should automatically have the required signatures
     _ensure_signatures_for_all_confirmed_departures()
     # --- END TEMPORARY MIGRATION STEP ---
+    
+def get_closest_end_of_month(target_date: date) -> date:
+    """
+    Finds the closest end-of-month date to the target_date.
+    Example: 
+    - Jan 28 -> Jan 31 (Closer to end of Jan than end of Dec)
+    - Feb 02 -> Jan 31 (Closer to end of Jan than end of Feb)
+    """
+    # 1. End of the current month of the target_date
+    last_day_current_month = calendar.monthrange(target_date.year, target_date.month)[1]
+    eom_current = date(target_date.year, target_date.month, last_day_current_month)
+    
+    # 2. End of the previous month
+    # Calculate first day of current month, subtract one day to get to prev month
+    first_day_current = date(target_date.year, target_date.month, 1)
+    eom_previous = first_day_current - timedelta(days=1)
+    
+    # Calculate differences
+    diff_current = abs((eom_current - target_date).days)
+    diff_previous = abs((eom_previous - target_date).days)
+    
+    if diff_previous < diff_current:
+        return eom_previous
+    return eom_current
+
+def recalculate_tenant_contract_dates(tenant, dry_run=False) -> list:
+    """
+    Recalculates move_out and probation_end dates based on:
+    1. Base contract duration
+    2. Confirmed subtenants (adds duration)
+    3. Approved standard extensions (Claim model)
+    4. Department Extensions (DepartmentExtension model)
+    5. Terminations (Termination model) - OVERRIDES ALL
+
+    Returns:
+        list: A list of strings describing the changes made.
+    """
+    
+    # 1. Check for Termination (The Overrule)
+    try:
+        termination = tenant.termination_record
+    except Termination.DoesNotExist:
+        termination = None
+
+    changes = []
+    
+    # --- PROBATION CALCULATION ---
+    # Probation is usually fixed unless extended by subtenancy, 
+    # but usually not affected by termination logic unless termination is within probation.
+    
+    base_probation = tenant.move_in + timedelta(days=app_config.PROBATION_PERIOD_DAYS)
+    
+    # Calculate confirmed subtenant duration (days)
+    confirmed_subtenants = tenant.subtenant_set.filter(university_confirmation=True)
+    total_sublet_days = 0
+    for sub in confirmed_subtenants:
+        if sub.move_out > sub.move_in:
+            duration = (sub.move_out - sub.move_in).days
+            total_sublet_days += duration
+            
+    # Apply subtenant days to probation
+    calculated_probation_end = tenant.probation_end
+    if tenant.probation_end > timezone.now().date():
+        calculated_probation_end = base_probation + timedelta(days=total_sublet_days)
+        calculated_probation_end = get_closest_end_of_month(calculated_probation_end)
+
+    if tenant.probation_end != calculated_probation_end:
+        if abs((tenant.probation_end - calculated_probation_end).days) > 3:
+            changes.append(f"Probation: {tenant.probation_end} -> {calculated_probation_end}")
+        tenant.probation_end = calculated_probation_end
+
+
+    # --- MOVE OUT CALCULATION ---
+
+    if termination:
+        # If a termination exists, override all calculations
+        final_move_out = termination.date
+        if tenant.move_out != final_move_out:
+            changes.append(f"MoveOut (Termination Applied): {tenant.move_out} -> {final_move_out}")
+            tenant.move_out = final_move_out
+    else:
+        # Standard Calculation Flow
+        
+        # A. Base Date
+        base_move_out = tenant.move_in + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
+        
+        # B. Standard Extensions
+        extension_count = tenant.extension or 0
+        total_extension_days = extension_count * app_config.DEFAULT_EXTENSION_DURATION_DAYS
+        
+        # C. Department Extensions (Special extensions the department can grant)
+        dept_extensions_months = DepartmentExtension.objects.filter(tenant=tenant).aggregate(
+            total_months=Sum('months')
+        )['total_months'] or 0
+        
+        # D. Calculation of raw move out date
+        raw_move_out = base_move_out + timedelta(days=total_sublet_days + total_extension_days)
+        
+        # Add months from Department Extensions
+        raw_move_out = raw_move_out + relativedelta(months=dept_extensions_months)
+        
+        # Round to closest end of month
+        final_move_out = get_closest_end_of_month(raw_move_out)
+
+        if tenant.move_out != final_move_out:
+            # Only log if change is significant ( > 3 days) to avoid noise from rounding jitters, temp change. Remove when stable @julius #todo
+            if abs((tenant.move_out - final_move_out).days) > 3:
+                changes.append(f"MoveOut (Recalculated): {tenant.move_out} -> {final_move_out}")
+            tenant.move_out = final_move_out
+
+    # Apply changes
+    if changes:
+        if not dry_run:
+            tenant.save()
+            logger.info(f"Recalculated dates for {tenant.username}: {', '.join(changes)}")
+            
+    return changes
+
+def get_contract_date_breakdown(tenant) -> dict:
+    """
+    Returns a dictionary containing all factors contributing to the tenant's move_out date.
+    Used for frontend display and verification.
+    """
+    
+    # 1. Base Data
+    base_move_out = tenant.move_in + timedelta(days=app_config.DEFAULT_CONTRACT_DURATION_DAYS)
+    
+    # 2. Standard Extensions (Claims)
+    extension_count = tenant.extension or 0
+    total_extension_days = extension_count * app_config.DEFAULT_EXTENSION_DURATION_DAYS
+    
+    # 3. Subtenancies
+    confirmed_subtenants = tenant.subtenant_set.filter(university_confirmation=True)
+    total_sublet_days = 0
+    sublet_details = []
+    
+    for sub in confirmed_subtenants:
+        if sub.move_out > sub.move_in:
+            duration = (sub.move_out - sub.move_in).days
+            total_sublet_days += duration
+            sublet_details.append({
+                "start": sub.move_in,
+                "end": sub.move_out,
+                "days": duration
+            })
+            
+    # 4. Department Extensions
+    dept_extensions = tenant.department_extensions.all()
+    dept_months_sum = dept_extensions.aggregate(total=Sum('months'))['total'] or 0
+    dept_ext_details = []
+    for ext in dept_extensions:
+        dept_ext_details.append({
+            "months": ext.months,
+            "note": ext.note,
+            "created_at": ext.created_at
+        })
+
+    # 5. Calculation Logic (The "Raw" Date)
+    raw_date = base_move_out + timedelta(days=total_sublet_days + total_extension_days)
+    
+    # Apply months logic using relativedelta
+    raw_date_with_months = raw_date + relativedelta(months=dept_months_sum)
+    
+    # 6. Final End-of-Month Snap
+    calculated_move_out = get_closest_end_of_month(raw_date_with_months)
+
+    # 7. Check for Termination (The Override)
+    is_terminated = False
+    termination_date = None
+    termination_note = None
+    
+    try:
+        termination = tenant.termination_record
+        is_terminated = True
+        termination_date = termination.date
+        termination_note = termination.note
+        final_effective_date = termination_date
+    except (ObjectDoesNotExist, AttributeError):
+        final_effective_date = calculated_move_out
+
+    return {
+        "move_in_date": tenant.move_in,
+        "base_contract": {
+            "duration_days": app_config.DEFAULT_CONTRACT_DURATION_DAYS,
+            "projected_end": base_move_out
+        },
+        "standard_extensions": {
+            "count": extension_count,
+            "days_per_extension": app_config.DEFAULT_EXTENSION_DURATION_DAYS,
+            "total_added_days": total_extension_days
+        },
+        "subtenancies": {
+            "total_added_days": total_sublet_days,
+            "count": len(sublet_details),
+            "details": sublet_details
+        },
+        "department_extensions": {
+            "total_months": dept_months_sum,
+            "details": dept_ext_details
+        },
+        "calculation_steps": {
+            "raw_date_before_snap": raw_date_with_months,
+            "calculated_end_of_month": calculated_move_out
+        },
+        "termination": {
+            "is_active": is_terminated,
+            "date": termination_date,
+            "note": termination_note
+        },
+        "final_move_out_date": final_effective_date
+    }

@@ -33,8 +33,8 @@ def find_current_tenant_by_room(room_name):
     except Tenant.DoesNotExist:
         return None
     except Tenant.MultipleObjectsReturned:
-        logger.warning(f"Multiple current tenants found for room '{room_name}'. This should not happen.")
-        raise ValueError(f"Room name '{room_name}' is not unique for current tenants.")
+        logger.warning(f"Multiple current tenants found for room '{room_name}'. Falling back to other selection methods.")
+        return None
 
 
 def find_current_tenants_by_name(name, surname):
@@ -86,25 +86,22 @@ def create_parcel_view(request):
     try:
         if room_str:
             recipient_tenant = find_current_tenant_by_room(room_str)
-            if not recipient_tenant:
-                return Response({"error": f"No current tenant found for room '{room_str}'."}, status=status.HTTP_404_NOT_FOUND)
-        elif name_str and surname_str:
+            
+        if not recipient_tenant and name_str and surname_str:
             tenants = find_current_tenants_by_name(name_str, surname_str)
             if tenants.count() == 1:
                 recipient_tenant = tenants.first()
             elif tenants.count() > 1:
-                return Response({"error": f"Name '{name_str} {surname_str}' is not unique for current tenants. Please use room number."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": f"Name '{name_str} {surname_str}' is not unique for current tenants. Please clarify."}, status=status.HTTP_400_BAD_REQUEST)
             else: # No tenant found, look for subtenant
                 subtenants = find_current_subtenants_by_name(name_str, surname_str)
                 if subtenants.count() == 1:
                     recipient_subtenant = subtenants.first()
                 elif subtenants.count() > 1:
                     return Response({"error": f"Name '{name_str} {surname_str}' is not unique for current subtenants. Please clarify."}, status=status.HTTP_400_BAD_REQUEST)
-                else:
-                    return Response({"error": f"No current tenant or subtenant found with name '{name_str} {surname_str}'."}, status=status.HTTP_404_NOT_FOUND)
-        else:
-            # This case should be caught by serializer validation, but as a safeguard:
-            return Response({"error": "Insufficient information to identify recipient."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not recipient_tenant and not recipient_subtenant:
+            return Response({"error": f"No current tenant or subtenant found for the provided information."}, status=status.HTTP_404_NOT_FOUND)
 
         # Determine recipient details for email
         if recipient_tenant:
