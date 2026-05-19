@@ -62,7 +62,7 @@ This is a **one-time setup** required for the backend VM (both dev and prod).
 ### Step 1: Install System Dependencies
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server rsync libsasl2-dev python-dev-is-python3 libldap2-dev libssl-dev
+sudo apt install -y python3-pip python3-dev libpq-dev python3-venv nginx curl redis-server rsync libsasl2-dev python-dev-is-python3 libldap2-dev libssl-dev libcups2-dev
 ```
 
 ### Step 2: Create Application User and Directory

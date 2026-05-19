@@ -30,9 +30,8 @@ source venv/bin/activate
 echo "Ensuring logs directory exists..."
 mkdir -p "${LOG_DIR}"
 
-# libcups2-dev: needed to build pycups (pip cannot provide C headers)
-sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libcups2-dev
+# libcups2-dev must be installed once on the host (root/sudo): needed to compile pycups.
+# Deploy user cannot apt install via CI; see docs/deployment.md (system dependencies).
 
 # Install/update dependencies
 echo "Installing dependencies..."
