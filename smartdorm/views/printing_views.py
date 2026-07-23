@@ -31,6 +31,29 @@ from ..permissions import GroupAndEmployeeTypePermission
 logger = logging.getLogger(__name__)
 
 
+def _agent_token_ok(request):
+    """
+    Validates the shared secret sent by the Pi agent on the outbound polling
+    endpoints. Accepts either "Authorization: Bearer <token>" or
+    "X-Device-Token: <token>".
+
+    Returns True when settings.DEVICE_AGENT_TOKEN is configured and matches.
+    If no token is configured (None/empty), access is denied to avoid leaking
+    print documents by accident.
+    """
+    expected = getattr(settings, 'DEVICE_AGENT_TOKEN', None)
+    if not expected:
+        logger.warning("DEVICE_AGENT_TOKEN not configured; rejecting agent request.")
+        return False
+    auth = request.META.get('HTTP_AUTHORIZATION', '')
+    token = ''
+    if auth.startswith('Bearer '):
+        token = auth[len('Bearer '):].strip()
+    if not token:
+        token = request.META.get('HTTP_X_DEVICE_TOKEN', '').strip()
+    return bool(token) and token == expected
+
+
 # ============================================================================
 # Tenant Endpoints (for regular users)
 # ============================================================================
@@ -361,10 +384,15 @@ def session_detail_view(request, session_id):
             )
         
         # Update status of active jobs (PRINTING or PENDING with CUPS job ID)
-        active_jobs = PrintJob.objects.filter(
-            session=session,
-            cups_job_id__isnull=False
-        ).exclude(status__in=[PrintJob.Status.COMPLETED, PrintJob.Status.FAILED, PrintJob.Status.CANCELLED])
+        # In agent/polling mode the Pi reports job status via the agent endpoint,
+        # so we do not poll remote CUPS here (the backend cannot reach the Pi).
+        if getattr(settings, 'PRINT_AGENT_MODE', True):
+            active_jobs = PrintJob.objects.none()
+        else:
+            active_jobs = PrintJob.objects.filter(
+                session=session,
+                cups_job_id__isnull=False
+            ).exclude(status__in=[PrintJob.Status.COMPLETED, PrintJob.Status.FAILED, PrintJob.Status.CANCELLED])
         
         for job in active_jobs:
             if job.device and job.device.cups_printer_name and job.cups_job_id:
@@ -594,49 +622,19 @@ def print_job_view(request, session_id):
             logger.warning(f"Could not extract PDF page count: {e}")
             # If PDF parsing fails, we'll rely on CUPS
         
-        # Prepare CUPS options
-        # Try both IPP standard (print-color-mode) and PPD-specific (ColorModel) options
-        # Some drivers ignore print-color-mode but accept ColorModel
-        cups_options = {
-            'copies': str(copies),
-        }
-        
-        # Add color mode - try both option names for maximum compatibility
-        if color_mode == 'Color':
-            # IPP standard option (works with modern drivers)
-            cups_options['print-color-mode'] = 'color'
-            # PPD-specific option (works with older drivers that have ColorModel in PPD)
-            # Try both CMYK and Color - different PPDs use different values
-            # Based on PPD definition "*ColorModel CMYK/Color:" the value can be either "CMYK" or "Color"
-            cups_options['ColorModel'] = 'CMYK'  # Primary value from PPD
-            # Also try Color as alternative (some PPDs use this)
-            # cups_options['ColorModel'] = 'Color'  # Alternative if CMYK doesn't work
-        else:
-            # Black & white
-            cups_options['print-color-mode'] = 'monochrome'
-            cups_options['ColorModel'] = 'Gray'
-        
-        logger.info(f"Prepared CUPS options for color_mode={color_mode}, copies={copies}: {cups_options}")
-        
-        # Send to CUPS
-        cups_job_id = submit_print_job(
-            printer_name=session.device.cups_printer_name,
-            file_data=file_data,
-            filename=filename,
-            title=f"SmartDorm Print {print_job.external_id[:8]}",
-            options=cups_options,
-            device=session.device,
+        # Agent/polling model: persist the document and leave the job PENDING.
+        # The Pi agent fetches PENDING jobs, prints locally via CUPS, and reports
+        # status back. The backend never contacts the Pi directly.
+        from django.core.files.base import ContentFile
+        print_job.copies = copies
+        print_job.document.save(filename, ContentFile(file_data), save=False)
+        print_job.status = PrintJob.Status.PENDING
+        print_job.save()
+        logger.info(
+            f"Queued PrintJob {print_job.external_id} (PENDING) for agent: "
+            f"color_mode={color_mode}, copies={copies}"
         )
-        
-        if cups_job_id:
-            print_job.cups_job_id = cups_job_id
-            print_job.status = PrintJob.Status.PRINTING
-            print_job.save()
-        else:
-            print_job.status = PrintJob.Status.FAILED
-            print_job.error_message = "Failed to submit job to CUPS server"
-            print_job.save()
-        
+
         serializer = PrintJobSerializer(print_job)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
         
@@ -676,10 +674,15 @@ def session_jobs_view(request, session_id):
             )
         
         # Update status of active jobs (PRINTING or PENDING with CUPS job ID)
-        active_jobs = PrintJob.objects.filter(
-            session=session,
-            cups_job_id__isnull=False
-        ).exclude(status__in=[PrintJob.Status.COMPLETED, PrintJob.Status.FAILED, PrintJob.Status.CANCELLED])
+        # In agent/polling mode the Pi reports job status via the agent endpoint,
+        # so we do not poll remote CUPS here (the backend cannot reach the Pi).
+        if getattr(settings, 'PRINT_AGENT_MODE', True):
+            active_jobs = PrintJob.objects.none()
+        else:
+            active_jobs = PrintJob.objects.filter(
+                session=session,
+                cups_job_id__isnull=False
+            ).exclude(status__in=[PrintJob.Status.COMPLETED, PrintJob.Status.FAILED, PrintJob.Status.CANCELLED])
         
         for job in active_jobs:
             if job.device and job.device.cups_printer_name and job.cups_job_id:
@@ -804,68 +807,24 @@ def start_scan_view(request, session_id):
         mode = request.data.get('mode', 'Color')  # Color or Gray
         source = request.data.get('source', 'Flatbed')  # Flatbed or ADF
         
-        # Call Pi service
+        # Agent/polling model: record the scan request on the session. The Pi
+        # agent picks it up on its next poll, scans locally, and uploads the
+        # result via POST /api/printing/scans/ (which clears pending_scan).
         try:
-            # Prefer Device.ip_address (set via Admin UI), fall back to legacy
-            # PI_SCAN_SERVICE_URL env var if the device has no IP configured yet.
-            pi_scan_port = getattr(settings, 'PI_SCAN_SERVICE_PORT', 8000)
-            device_ip = (session.device.ip_address or "").strip() if session.device else ""
-            if device_ip:
-                pi_base_url = f"http://{device_ip}:{pi_scan_port}"
-            else:
-                pi_base_url = getattr(settings, 'PI_SCAN_SERVICE_URL', '')
-            if not pi_base_url:
-                logger.error(
-                    "No scan-service URL configured. Set Device.ip_address via "
-                    "admin UI or fall back to PI_SCAN_SERVICE_URL env var."
-                )
-                return Response(
-                    {"error": "Scan service not configured."},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE
-                )
-            pi_url = f"{pi_base_url}/scan/start"
-            logger.info(f"Calling Pi scan service at: {pi_url}")
-            payload = {
-                "session_id": session.external_id,
+            session.pending_scan = {
                 "resolution": resolution,
                 "mode": mode,
-                "source": source
+                "source": source,
+                "requested_at": timezone.now().isoformat(),
             }
-            
-            response = requests.post(
-                pi_url,
-                json=payload,
-                timeout=settings.PI_SCAN_SERVICE_TIMEOUT
-            )
-            
-            if response.status_code == 200:
-                pi_response = response.json()
-                return Response({
-                    "scan_id": pi_response.get("scan_id"),
-                    "status": pi_response.get("status", "pending"),
-                    "message": "Scan started successfully."
-                }, status=status.HTTP_200_OK)
-            else:
-                logger.error(f"Pi-Service error: {response.status_code} - {response.text}")
-                return Response(
-                    {"error": f"Scan service error: {response.status_code}"},
-                    status=status.HTTP_502_BAD_GATEWAY
-                )
-                
-        except requests.exceptions.Timeout:
-            logger.error(f"Timeout connecting to Pi scan service: {pi_url}")
-            return Response(
-                {"error": "Scan service timeout. Please try again."},
-                status=status.HTTP_504_GATEWAY_TIMEOUT
-            )
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error to Pi scan service: {pi_url}")
-            return Response(
-                {"error": "Cannot connect to scan service. Please check configuration."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+            session.save(update_fields=["pending_scan"])
+            logger.info(f"Queued scan request for session {session.external_id}: {session.pending_scan}")
+            return Response({
+                "status": "queued",
+                "message": "Scan queued. The device will start scanning shortly."
+            }, status=status.HTTP_200_OK)
         except Exception as e:
-            logger.error(f"Error calling Pi scan service: {e}", exc_info=True)
+            logger.error(f"Error queuing scan request: {e}", exc_info=True)
             return Response(
                 {"error": "An error occurred while starting scan."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1094,7 +1053,12 @@ def upload_scan_view(request):
             filename=os.path.basename(file_path),
             file_path=relative_path
         )
-        
+
+        # Agent model: clear the pending scan request now that we received a result.
+        if session.pending_scan is not None:
+            session.pending_scan = None
+            session.save(update_fields=["pending_scan"])
+
         serializer = ScanSerializer(scan)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
         
@@ -1109,6 +1073,130 @@ def upload_scan_view(request):
             {"error": "An error occurred while uploading scan."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ============================================================================
+# Pi Agent Endpoints (outbound polling; shared-token protected)
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([])  # auth via shared device token
+def agent_commands_view(request):
+    """
+    GET /api/printing/agent/commands/
+
+    Polled by the Pi agent. Returns pending print jobs for the active device and
+    any pending scan request on the active session. Token-protected.
+    """
+    if not _agent_token_ok(request):
+        return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    device = Device.objects.filter(is_active=True).first()
+    if not device:
+        return Response({"print_jobs": [], "scan_requests": []}, status=status.HTTP_200_OK)
+
+    print_jobs = []
+    pending_jobs = PrintJob.objects.filter(
+        device=device,
+        status=PrintJob.Status.PENDING,
+    ).order_by('created_at')
+    for job in pending_jobs:
+        if not job.document:
+            continue
+        print_jobs.append({
+            "job_id": job.external_id,
+            "filename": job.filename,
+            "color_mode": job.color_mode,
+            "copies": job.copies or 1,
+            "printer_name": device.cups_printer_name,
+            "file_url": f"/api/printing/agent/jobs/{job.external_id}/file/",
+        })
+
+    scan_requests = []
+    active_session = PrintSession.objects.filter(
+        device=device,
+        status=PrintSession.Status.ACTIVE,
+    ).first()
+    if active_session and active_session.pending_scan:
+        req = dict(active_session.pending_scan)
+        req["session_id"] = active_session.external_id
+        scan_requests.append(req)
+
+    return Response(
+        {"print_jobs": print_jobs, "scan_requests": scan_requests},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['GET'])
+@permission_classes([])  # auth via shared device token
+def agent_job_file_view(request, job_id):
+    """
+    GET /api/printing/agent/jobs/<job_id>/file/
+
+    Streams the stored PDF for a print job to the Pi agent. Token-protected.
+    """
+    if not _agent_token_ok(request):
+        return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
+    try:
+        job = PrintJob.objects.get(external_id=job_id)
+    except PrintJob.DoesNotExist:
+        raise Http404("Job not found.")
+    if not job.document:
+        raise Http404("No document stored for this job.")
+    return FileResponse(job.document.open('rb'), content_type='application/pdf')
+
+
+@api_view(['POST'])
+@permission_classes([])  # auth via shared device token
+def agent_job_status_view(request, job_id):
+    """
+    POST /api/printing/agent/jobs/<job_id>/status/
+
+    The Pi agent reports progress. Body:
+    {"status": "PRINTING"|"COMPLETED"|"FAILED"|"CANCELLED",
+     "cups_job_id": "...", "pages": N, "error_message": "..."}. Token-protected.
+    """
+    if not _agent_token_ok(request):
+        return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
+    try:
+        job = PrintJob.objects.get(external_id=job_id)
+    except PrintJob.DoesNotExist:
+        return Response({"error": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    new_status = (request.data.get('status') or '').upper()
+    if new_status not in ('PRINTING', 'COMPLETED', 'FAILED', 'CANCELLED'):
+        return Response({"error": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+
+    cups_job_id = request.data.get('cups_job_id')
+    if cups_job_id is not None:
+        job.cups_job_id = str(cups_job_id)
+
+    if new_status == 'COMPLETED':
+        job.status = PrintJob.Status.COMPLETED
+        job.completed_at = timezone.now()
+        job.error_message = None
+        pages = request.data.get('pages')
+        try:
+            pages = int(pages) if pages is not None else None
+        except (ValueError, TypeError):
+            pages = None
+        if pages and pages > 0:
+            job.pages = pages
+        elif not job.pages:
+            job.pages = 1
+        # cost is computed automatically in PrintJob.save()
+    elif new_status == 'FAILED':
+        job.status = PrintJob.Status.FAILED
+        job.error_message = str(request.data.get('error_message', 'Print failed on device.'))[:2000]
+    elif new_status == 'CANCELLED':
+        job.status = PrintJob.Status.CANCELLED
+    else:  # PRINTING
+        job.status = PrintJob.Status.PRINTING
+        job.error_message = None
+
+    job.save()
+    return Response(PrintJobSerializer(job).data, status=status.HTTP_200_OK)
 
 
 # ============================================================================

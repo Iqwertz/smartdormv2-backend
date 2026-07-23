@@ -198,6 +198,10 @@ printing_urlpatterns = [
     # Pi endpoints (no auth)
     path('active-session/', printing_views.active_session_view, name='printing-active-session'),
     path('scans/', printing_views.upload_scan_view, name='printing-upload-scan'),
+    # Pi agent endpoints (outbound polling; shared-token protected)
+    path('agent/commands/', printing_views.agent_commands_view, name='printing-agent-commands'),
+    path('agent/jobs/<str:job_id>/file/', printing_views.agent_job_file_view, name='printing-agent-job-file'),
+    path('agent/jobs/<str:job_id>/status/', printing_views.agent_job_status_view, name='printing-agent-job-status'),
     # Department management endpoints
     path('tenant-billing-overview/', printing_views.tenant_billing_overview_view, name='printing-tenant-billing-overview'),
     path('device/<int:device_id>/overview/', printing_views.device_overview_view, name='printing-device-overview'),

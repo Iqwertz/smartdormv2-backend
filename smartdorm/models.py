@@ -463,6 +463,11 @@ class PrintSession(models.Model):
     ended_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
     external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    pending_scan = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Set when a scan is requested; the Pi agent reads it, scans, uploads, then it is cleared. Example: {'resolution': 300, 'mode': 'Color', 'source': 'Flatbed'}",
+    )
     
     class Meta:
         db_table = 't_print_session'
@@ -488,6 +493,13 @@ class PrintJob(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
     filename = models.CharField(max_length=255)
     color_mode = models.CharField(max_length=10, default='Color', choices=[('Color', 'Color'), ('Gray', 'Gray')], help_text="Color mode used for this job")
+    copies = models.IntegerField(default=1, help_text="Number of copies requested (needed by the Pi agent to print)")
+    document = models.FileField(
+        upload_to='print_jobs/',
+        null=True,
+        blank=True,
+        help_text="Uploaded PDF to be fetched and printed by the Pi agent.",
+    )
     pages = models.IntegerField(null=True, blank=True, help_text="Number of printed pages (updated after printing)")
     cost = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Cost in Euro (only for COMPLETED)")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)

@@ -9,7 +9,7 @@ LOCAL_ENV = os.environ.get("LOCAL_ENV", "false").lower() in ("true", "1", "yes")
 PRODUCTION_MODE = os.environ.get("PRODUCTION", "false").lower() in ("true", "1", "yes")
 DEBUG = not PRODUCTION_MODE
 
-ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', '192.168.0.106', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
+ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', '192.168.0.102', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
 
 if os.environ.get("ALLOWED_HOSTS"):
     ALLOWED_HOSTS.extend([h.strip() for h in os.environ.get("ALLOWED_HOSTS").split(",")])
@@ -96,8 +96,19 @@ CUPS_SERVER = os.environ.get("CUPS_SERVER", None)  # IP or hostname of Raspberry
 CUPS_PRINTER_NAME = os.environ.get("CUPS_PRINTER_NAME", None)  # CUPS printer name (e.g., "Samsung_C1860_Series")
 
 # Pi HTTP service for scans (set in .env, e.g. http://192.168.0.124:5000)
+# NOTE: legacy push model (backend -> Pi). Kept for backwards compatibility; the
+# new agent/polling model does not use these.
 PI_SCAN_SERVICE_URL = os.environ.get("PI_SCAN_SERVICE_URL", "http://localhost:5000")
 PI_SCAN_SERVICE_TIMEOUT = int(os.environ.get("PI_SCAN_SERVICE_TIMEOUT", "300"))  # 5 minutes for scan
+
+# Shared secret the Pi agent must send (Authorization: Bearer <token>) to the
+# outbound polling endpoints (/api/printing/agent/...). Set per environment in .env.
+DEVICE_AGENT_TOKEN = os.environ.get("DEVICE_AGENT_TOKEN", None)
+
+# Agent/polling model: the Pi reports print-job status via the agent endpoints,
+# so the backend must NOT poll remote CUPS. Set to "false" only if you revert to
+# the legacy push model where the backend talks to CUPS directly.
+PRINT_AGENT_MODE = os.environ.get("PRINT_AGENT_MODE", "true").lower() in ("true", "1", "yes")
 
 # --- Email Configuration ---
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
