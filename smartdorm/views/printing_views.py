@@ -1109,7 +1109,8 @@ def agent_commands_view(request):
             "color_mode": job.color_mode,
             "copies": job.copies or 1,
             "printer_name": device.cups_printer_name,
-            "file_url": f"/api/printing/agent/jobs/{job.external_id}/file/",
+            # Relative to SMARTDORM_API_BASE (which already ends with /api)
+            "file_url": f"/printing/agent/jobs/{job.external_id}/file/",
         })
 
     scan_requests = []
@@ -1121,6 +1122,10 @@ def agent_commands_view(request):
         req = dict(active_session.pending_scan)
         req["session_id"] = active_session.external_id
         scan_requests.append(req)
+        # Claim-once: clear immediately so we never re-dispatch the same scan on
+        # every poll. If the scan fails on the Pi, the user simply re-triggers.
+        active_session.pending_scan = None
+        active_session.save(update_fields=["pending_scan"])
 
     return Response(
         {"print_jobs": print_jobs, "scan_requests": scan_requests},
