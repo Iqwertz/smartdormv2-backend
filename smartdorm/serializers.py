@@ -1,6 +1,6 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, LdapRoleAssignment, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan
 from django.utils import timezone
 from django.urls import reverse
 import base64
@@ -332,6 +332,24 @@ class DepartmentExtensionCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = DepartmentExtension
         fields = ['tenant_id', 'months', 'note']
+
+class LdapRoleAssignmentSerializer(serializers.ModelSerializer):
+    group_cn = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LdapRoleAssignment
+        fields = ['id', 'username', 'display_name', 'group_dn', 'group_cn', 'note', 'expires_at', 'created_by', 'created_at']
+        read_only_fields = ['id', 'created_by', 'created_at']
+
+    def get_group_cn(self, obj):
+        """Readable role name: the value of the DN's first RDN ('cn=HSV,ou=...' -> 'HSV')."""
+        first_rdn = obj.group_dn.split(',')[0]
+        return first_rdn.split('=', 1)[1] if '=' in first_rdn else first_rdn
+
+class LdapRoleAssignmentCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LdapRoleAssignment
+        fields = ['username', 'display_name', 'group_dn', 'note', 'expires_at']
 
 class EventSerializer(serializers.ModelSerializer):
     class Meta:

@@ -7,9 +7,9 @@ import logging
 import ldap
 from ldap.filter import escape_filter_chars
 
-from smartdorm.models import Tenant, Engagement, GlobalAppSettings, Department, Subtenant, Room
+from smartdorm.models import Tenant, Engagement, GlobalAppSettings, Department, Subtenant, Room, LdapRoleAssignment
 from smartdorm import config as app_config
-from smartdorm.utils.ldap_sync import floor_group_dn, subtenant_target_group_dns, subtenant_managed_group_dns, SUBTENANT_EMPLOYEE_TYPE
+from smartdorm.utils.ldap_sync import floor_group_dn, subtenant_target_group_dns, subtenant_managed_group_dns, custom_role_dns_by_username, SUBTENANT_EMPLOYEE_TYPE
 
 # Configure logging
 logger = logging.getLogger('smartdorm')
@@ -132,6 +132,16 @@ class Command(BaseCommand):
             return
 
         try:
+            # --- 0. Revoke expired special role assignments ---
+            # Runs before the tenant loop on purpose: if an expired role happens to be a
+            # group the account is legitimately owed (their floor, their department), the
+            # loop below adds it back in the same run.
+            self.revoke_expired_role_assignments(con, today)
+
+            # Manually granted roles, keyed by lowercased username. Fetched once and used
+            # by both the tenant and the subtenant phase.
+            custom_role_dns = custom_role_dns_by_username()
+
             # --- 1. Identify "Managed" Groups ---
             # We must identify which groups allow automatic removal.
             # We do NOT want to remove 'cn=admin' or manual groups.
@@ -198,6 +208,11 @@ class Command(BaseCommand):
                         group_cn = self._get_ldap_group_name(eng.department.full_name, tenant)
                         should_have_dns.add(f"cn={group_cn},ou=groups2,dc=schollheim,dc=net".lower())
 
+                # 4. Special roles granted by hand from the Netzwerkreferat page.
+                # Treated as owed so they are never stripped below, and re-added if they
+                # went missing in the meantime.
+                should_have_dns |= custom_role_dns.get(tenant.username.lower(), set())
+
                 # --- B. Fetch ACTUAL Groups ---
                 current_group_dns = self._get_user_groups(con, user_dn)
 
@@ -217,13 +232,34 @@ class Command(BaseCommand):
                         self._remove_from_group(con, user_dn, g_dn, tenant.username)
 
             # --- 3. Process Subtenants ---
-            self.sync_subtenant_ldap_roles(con, all_floors, today)
+            self.sync_subtenant_ldap_roles(con, all_floors, today, custom_role_dns)
 
         finally:
             con.unbind_s()
             print("LDAP connection closed.")
 
-    def sync_subtenant_ldap_roles(self, con, all_floors, today):
+    def revoke_expired_role_assignments(self, con, today):
+        """
+        Removes special role assignments whose expiry date has passed and drops their
+        records, so a temporary grant really is temporary.
+        """
+        expired = LdapRoleAssignment.objects.filter(expires_at__lt=today)
+        if not expired:
+            return
+
+        for assignment in expired:
+            user_dn = f"cn={assignment.username},ou=users,dc=schollheim,dc=net"
+            self._remove_from_group(con, user_dn, assignment.group_dn, assignment.username)
+            self.stdout.write(
+                f"Expired special role '{assignment.group_dn}' revoked for {assignment.username}."
+            )
+
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would delete {len(expired)} expired role assignment(s).")
+        else:
+            expired.delete()
+
+    def sync_subtenant_ldap_roles(self, con, all_floors, today, custom_role_dns):
         """
         Synchronizes LDAP groups for subtenants.
 
@@ -269,6 +305,9 @@ class Command(BaseCommand):
             else:
                 # Every sublet has ended: revoke the groups we manage
                 should_have_dns = set()
+
+            # Special roles granted by hand survive - and outlive - the sublet itself
+            should_have_dns |= custom_role_dns.get(username.lower(), set())
 
             user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
             current_group_dns = self._get_user_groups(con, user_dn)

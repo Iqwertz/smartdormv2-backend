@@ -71,6 +71,32 @@ def subtenant_managed_group_dns(all_floors):
     return managed
 
 
+def custom_role_dns_by_username():
+    """
+    {username_lower: {group_dn_lower, ...}} of every LdapRoleAssignment that is still
+    valid today.
+
+    Expired rows are left out so the sync stops treating them as owed - they are
+    revoked separately by the nightly command.
+    """
+    from django.db.models import Q
+
+    from smartdorm.models import LdapRoleAssignment
+
+    today = timezone.now().date()
+    assignments = LdapRoleAssignment.objects.filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gte=today)
+    )
+
+    dns_by_username = {}
+    for assignment in assignments:
+        if not assignment.username or not assignment.group_dn:
+            continue
+        dns_by_username.setdefault(assignment.username.lower(), set()).add(assignment.group_dn.lower())
+
+    return dns_by_username
+
+
 def resolve_subtenant_username(subtenant):
     """
     Resolves a subtenant's LDAP cn.
