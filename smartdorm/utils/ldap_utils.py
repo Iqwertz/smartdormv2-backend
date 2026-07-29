@@ -278,10 +278,14 @@ def delete_ldap_user(username):
         if 'con' in locals() and con:
             con.unbind_s()
 
-def find_ldap_user_by_email(email):
+def find_ldap_user_by_email(email, employee_type=None):
     """
     Finds an LDAP user by email address.
     Returns (username, full_name) if found, (None, None) if not found.
+
+    An email address is not unique across account types - a former subtenant who later
+    became a tenant has both accounts under the same address. Pass employee_type
+    ('TENANT', 'SUBTENANT', ...) to restrict the search to one kind of account.
     """
     ldap_uri = settings.AUTH_LDAP_SERVER_URI
     admin_dn = settings.AUTH_LDAP_BIND_DN
@@ -294,7 +298,10 @@ def find_ldap_user_by_email(email):
         con.simple_bind_s(admin_dn, admin_password)
 
         # Search for user by email
-        search_filter = f"(mail={email})"
+        if employee_type:
+            search_filter = f"(&(mail={email})(employeeType={employee_type}))"
+        else:
+            search_filter = f"(mail={email})"
         result = con.search_s(user_base_dn, ldap.SCOPE_SUBTREE, search_filter, ['cn', 'givenName', 'sn'])
         
         if result:
