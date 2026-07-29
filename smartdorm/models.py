@@ -282,8 +282,34 @@ class DepartmentExtension(models.Model):
 
     class Meta:
         db_table = 't_department_extension'
-        managed = True 
-        
+        managed = True
+
+class LdapRoleAssignment(models.Model):
+    """
+    An LDAP group membership granted by hand from the Netzwerkreferat page.
+
+    Exists so the nightly recalculate_tenant_stats sync knows the membership is
+    intentional: without a record here the sync strips every managed group it cannot
+    derive from floor/department/defaults, so a manual grant would be gone by morning.
+
+    Keyed by LDAP cn instead of a Tenant FK, so one model covers tenants, subtenants
+    and Verwaltung accounts alike, and both phases of the sync can look an assignment
+    up by the username they already hold.
+    """
+    id = models.AutoField(primary_key=True)
+    username = models.CharField(max_length=255, help_text="LDAP cn of the account")
+    display_name = models.CharField(max_length=255, null=True, blank=True, help_text="Snapshot of the account's display name, for the overview list")
+    group_dn = models.CharField(max_length=512, help_text="Full DN of the granted LDAP group")
+    note = models.TextField(null=True, blank=True, help_text="Why this role was granted")
+    expires_at = models.DateField(null=True, blank=True, help_text="Last day the role is valid. Empty means unlimited.")
+    created_by = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_ldap_role_assignment'
+        managed = True
+        unique_together = (('username', 'group_dn'),)
+
 class GlobalAppSettings(models.Model):
     # Singleton model: there should only be one instance of this model.
     id = models.PositiveIntegerField(primary_key=True, default=1, editable=False)

@@ -7,6 +7,7 @@ from .views import (
     department_views,
     engagement_views,
     log_views,
+    network_views,
     parcel_views,
     shared_views,
     attendance_views,
@@ -171,6 +172,15 @@ common_urlpatterns = [
     path('departments-for-select/', shared_views.departments_for_select_view, name='common-departments-for-select'),
 ]
 
+# Netzwerkreferat URLs (special LDAP role assignments)
+network_urlpatterns = [
+    path('ldap-roles/', network_views.list_ldap_role_assignments_view, name='ldap-role-list'),
+    path('ldap-roles/create/', network_views.create_ldap_role_assignment_view, name='ldap-role-create'),
+    path('ldap-roles/<int:assignment_id>/delete/', network_views.delete_ldap_role_assignment_view, name='ldap-role-delete'),
+    path('ldap-groups/', network_views.list_ldap_groups_view, name='ldap-group-list'),
+    path('ldap-users/', network_views.list_ldap_users_view, name='ldap-user-list'),
+]
+
 # Attendance URLs
 attendance_urlpatterns = [
     path('events/', attendance_views.list_create_events_view, name='attendance-events'),
@@ -221,6 +231,7 @@ urlpatterns = [
     path('api/engagements/', include((engagement_urlpatterns, 'engagements'))),
     path('api/department/', include((department_urlpatterns, 'department'))),
     path('api/common/', include((common_urlpatterns, 'common'))),
+    path('api/network/', include((network_urlpatterns, 'network'))),
     path('api/attendance/', include((attendance_urlpatterns, 'attendance'))),
     path('api/printing/', include((printing_urlpatterns, 'printing'))),
 ]

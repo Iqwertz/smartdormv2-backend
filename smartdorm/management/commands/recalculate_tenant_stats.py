@@ -7,8 +7,9 @@ import logging
 import ldap
 from ldap.filter import escape_filter_chars
 
-from smartdorm.models import Tenant, Engagement, GlobalAppSettings, Department
+from smartdorm.models import Tenant, Engagement, GlobalAppSettings, Department, Subtenant, Room, LdapRoleAssignment
 from smartdorm import config as app_config
+from smartdorm.utils.ldap_sync import floor_group_dn, subtenant_target_group_dns, subtenant_managed_group_dns, custom_role_dns_by_username, SUBTENANT_EMPLOYEE_TYPE
 
 # Configure logging
 logger = logging.getLogger('smartdorm')
@@ -58,8 +59,8 @@ class Command(BaseCommand):
         # 1. Recalculate Stats (Points, Sublets, Extensions)
         self.sync_stats(tenants)
 
-        # 2. Sync LDAP Roles
-        self.sync_ldap_roles(tenants, current_semester)
+        # 2. Sync LDAP Roles (tenants and subtenants)
+        self.sync_ldap_roles(tenants, current_semester, today)
 
         self.stdout.write(self.style.SUCCESS("Nightly routine finished."))
 
@@ -113,15 +114,15 @@ class Command(BaseCommand):
                     
         self.stdout.write(f"Stats calculation complete. {updates_count} tenants updated.")
 
-    def sync_ldap_roles(self, tenants, current_semester):
+    def sync_ldap_roles(self, tenants, current_semester, today):
         """Synchronizes LDAP groups based on tenant status and engagements."""
         print("Starting LDAP role synchronization...")
-        
+
         # --- LDAP Connection Setup ---
         ldap_uri = settings.AUTH_LDAP_SERVER_URI
         admin_dn = settings.AUTH_LDAP_BIND_DN
         admin_pw = settings.AUTH_LDAP_BIND_PASSWORD
-        
+
         try:
             con = ldap.initialize(ldap_uri)
             con.protocol_version = ldap.VERSION3
@@ -131,12 +132,22 @@ class Command(BaseCommand):
             return
 
         try:
+            # --- 0. Revoke expired special role assignments ---
+            # Runs before the tenant loop on purpose: if an expired role happens to be a
+            # group the account is legitimately owed (their floor, their department), the
+            # loop below adds it back in the same run.
+            self.revoke_expired_role_assignments(con, today)
+
+            # Manually granted roles, keyed by lowercased username. Fetched once and used
+            # by both the tenant and the subtenant phase.
+            custom_role_dns = custom_role_dns_by_username()
+
             # --- 1. Identify "Managed" Groups ---
-            # We must identify which groups allow automatic removal. 
+            # We must identify which groups allow automatic removal.
             # We do NOT want to remove 'cn=admin' or manual groups.
-            
+
             managed_groups_dn = set()
-            
+
             # A. Default Groups
             for g in app_config.DEFAULT_TENANT_LDAP_GROUPS:
                 managed_groups_dn.add(g.lower())
@@ -146,11 +157,12 @@ class Command(BaseCommand):
             managed_groups_dn.add(hsv_group_dn)
 
             # C. All Floor Groups (H1EG to H2F5, etc)
-            # We query the DB for all unique floors to build this list dynamically
-            all_floors = Tenant.objects.values_list('current_floor', flat=True).distinct()
+            # Taken from Room, not from Tenant.current_floor: a floor that currently has
+            # no active tenant must still be managed, otherwise stale memberships there
+            # can never be cleaned up.
+            all_floors = [fl for fl in Room.objects.values_list('floor', flat=True).distinct() if fl]
             for fl in all_floors:
-                if fl:
-                    managed_groups_dn.add(f"cn={fl},ou=groups2,dc=schollheim,dc=net".lower())
+                managed_groups_dn.add(floor_group_dn(fl).lower())
 
             # D. All Department Groups
             all_depts = Department.objects.all()
@@ -163,8 +175,7 @@ class Command(BaseCommand):
                 
                 if base_name.lower() == 'flursprecher':
                     for fl in all_floors:
-                        if fl:
-                            managed_groups_dn.add(f"cn=flursprecher-{fl},ou=groups2,dc=schollheim,dc=net".lower())
+                        managed_groups_dn.add(f"cn=flursprecher-{fl},ou=groups2,dc=schollheim,dc=net".lower())
 
             self.stdout.write(f"Identified {len(managed_groups_dn)} managed system groups.")
 
@@ -184,7 +195,7 @@ class Command(BaseCommand):
 
                 # 2. Floor
                 if tenant.current_floor:
-                    should_have_dns.add(f"cn={tenant.current_floor},ou=groups2,dc=schollheim,dc=net".lower())
+                    should_have_dns.add(floor_group_dn(tenant.current_floor).lower())
 
                 # 3. Engagements
                 active_engagements = [e for e in tenant.engagement_set.all() if e.semester == current_semester]
@@ -196,6 +207,11 @@ class Command(BaseCommand):
                     for eng in active_engagements:
                         group_cn = self._get_ldap_group_name(eng.department.full_name, tenant)
                         should_have_dns.add(f"cn={group_cn},ou=groups2,dc=schollheim,dc=net".lower())
+
+                # 4. Special roles granted by hand from the Netzwerkreferat page.
+                # Treated as owed so they are never stripped below, and re-added if they
+                # went missing in the meantime.
+                should_have_dns |= custom_role_dns.get(tenant.username.lower(), set())
 
                 # --- B. Fetch ACTUAL Groups ---
                 current_group_dns = self._get_user_groups(con, user_dn)
@@ -215,10 +231,127 @@ class Command(BaseCommand):
                     for g_dn in groups_to_remove:
                         self._remove_from_group(con, user_dn, g_dn, tenant.username)
 
+            # --- 3. Process Subtenants ---
+            self.sync_subtenant_ldap_roles(con, all_floors, today, custom_role_dns)
+
         finally:
             con.unbind_s()
             print("LDAP connection closed.")
-            
+
+    def revoke_expired_role_assignments(self, con, today):
+        """
+        Removes special role assignments whose expiry date has passed and drops their
+        records, so a temporary grant really is temporary.
+        """
+        expired = LdapRoleAssignment.objects.filter(expires_at__lt=today)
+        if not expired:
+            return
+
+        for assignment in expired:
+            user_dn = f"cn={assignment.username},ou=users,dc=schollheim,dc=net"
+            self._remove_from_group(con, user_dn, assignment.group_dn, assignment.username)
+            self.stdout.write(
+                f"Expired special role '{assignment.group_dn}' revoked for {assignment.username}."
+            )
+
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would delete {len(expired)} expired role assignment(s).")
+        else:
+            expired.delete()
+
+    def sync_subtenant_ldap_roles(self, con, all_floors, today, custom_role_dns):
+        """
+        Synchronizes LDAP groups for subtenants.
+
+        Subtenants have no username column, so accounts are matched by email. Several
+        Subtenant rows (repeat sublets) can share one LDAP account, so rows are grouped
+        by email and the account is treated as active if any of its rows is running now.
+        """
+        self.stdout.write("Starting subtenant LDAP synchronization...")
+
+        managed_groups_dn = subtenant_managed_group_dns(all_floors)
+        username_by_email = self._build_ldap_email_map(con)
+        tenant_usernames = set(
+            u.lower() for u in Tenant.objects.exclude(username__isnull=True).values_list('username', flat=True)
+        )
+
+        # Group subtenant rows by email address
+        rows_by_email = {}
+        for sub in Subtenant.objects.select_related('tenant'):
+            if not sub.email:
+                continue
+            rows_by_email.setdefault(sub.email.strip().lower(), []).append(sub)
+
+        for email, rows in rows_by_email.items():
+            username = username_by_email.get(email)
+            if not username:
+                logger.warning(f"No LDAP account found for subtenant '{email}'. Skipping.")
+                continue
+
+            # Never touch a main tenant's account, even on an email collision
+            if username.lower() in tenant_usernames:
+                logger.warning(
+                    f"LDAP account '{username}' for subtenant '{email}' belongs to a main tenant. Skipping."
+                )
+                continue
+
+            active_row = next((r for r in rows if r.move_in <= today <= r.move_out), None)
+
+            if active_row:
+                should_have_dns = subtenant_target_group_dns(active_row)
+            elif all(r.move_in > today for r in rows):
+                # Sublet has not started yet - groups were granted at creation on purpose
+                continue
+            else:
+                # Every sublet has ended: revoke the groups we manage
+                should_have_dns = set()
+
+            # Special roles granted by hand survive - and outlive - the sublet itself
+            should_have_dns |= custom_role_dns.get(username.lower(), set())
+
+            user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
+            current_group_dns = self._get_user_groups(con, user_dn)
+
+            groups_to_add = should_have_dns - current_group_dns
+            groups_to_remove = (current_group_dns - should_have_dns).intersection(managed_groups_dn)
+
+            for g_dn in groups_to_add:
+                self._add_to_group(con, user_dn, g_dn, username)
+
+            for g_dn in groups_to_remove:
+                self._remove_from_group(con, user_dn, g_dn, username)
+
+    def _build_ldap_email_map(self, con):
+        """
+        Maps lowercased email -> LDAP cn for every subtenant account, in a single search.
+        Avoids one round trip per subtenant.
+
+        Restricted to employeeType=SUBTENANT on purpose: subletting first and moving in
+        later is common, so most subtenant email addresses also belong to a TENANT
+        account that this phase must never modify.
+        """
+        email_map = {}
+        try:
+            results = con.search_s(
+                "ou=users,dc=schollheim,dc=net",
+                ldap.SCOPE_SUBTREE,
+                f"(&(objectClass=inetOrgPerson)(employeeType={SUBTENANT_EMPLOYEE_TYPE}))",
+                ['cn', 'mail']
+            )
+        except ldap.LDAPError as e:
+            logger.error(f"Could not list LDAP users to resolve subtenant accounts: {e}")
+            return email_map
+
+        for dn, attrs in results:
+            if not dn or 'cn' not in attrs or 'mail' not in attrs:
+                continue
+            cn = attrs['cn'][0].decode('utf-8')
+            for raw_mail in attrs['mail']:
+                email_map[raw_mail.decode('utf-8').strip().lower()] = cn
+
+        return email_map
+
+
     def _get_base_dept_name(self, full_name):
         name = full_name.split(' ')[0]
         name = name.replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
