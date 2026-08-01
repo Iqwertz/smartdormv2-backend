@@ -6,9 +6,12 @@ from .views import (
     tenant_views,
     department_views,
     engagement_views,
+    log_views,
+    network_views,
     parcel_views,
     shared_views,
     attendance_views,
+    printing_views,
 )
 
 # Auth-related URLs
@@ -43,6 +46,21 @@ tenant_urlpatterns = [
     path('engagement-applications/pdf/', engagement_views.get_applications_pdf, name='applications-pdf'),
     path('my-engagement-applications/', tenant_views.my_engagement_applications_view, name='my-engagement-applications'),
     path('my-contract-calculation/', tenant_views.my_contract_calculation_view, name='my-contract-calculation'),
+
+    # Print & Scan URLs - IMPORTANT: device-status MUST come before sessions/<str:session_id> to avoid URL conflicts
+    path('printing/device-status/', printing_views.device_status_view, name='printing-device-status'),
+    path('printing/my-costs/', printing_views.my_costs_view, name='printing-my-costs'),
+    path('printing/my-sessions/', printing_views.my_sessions_view, name='printing-my-sessions'),
+    path('printing/my-scans/', printing_views.my_scans_view, name='printing-my-scans'),
+    path('printing/sessions/start/', printing_views.start_session_view, name='printing-sessions-start'),
+    # NOTE: sessions/<str:session_id> must come AFTER all other specific printing paths
+    path('printing/sessions/<str:session_id>/', printing_views.session_detail_view, name='printing-sessions-detail'),
+    path('printing/sessions/<str:session_id>/end/', printing_views.end_session_view, name='printing-sessions-end'),
+    path('printing/sessions/<str:session_id>/print/', printing_views.print_job_view, name='printing-sessions-print'),
+    path('printing/sessions/<str:session_id>/jobs/', printing_views.session_jobs_view, name='printing-sessions-jobs'),
+    path('printing/sessions/<str:session_id>/scans/', printing_views.session_scans_view, name='printing-sessions-scans'),
+    path('printing/sessions/<str:session_id>/scan/start/', printing_views.start_scan_view, name='printing-sessions-scan-start'),
+    path('printing/scans/<str:scan_id>/download/', printing_views.download_scan_view, name='printing-scans-download'),
 ]
 
 # Engagement-related URLs
@@ -81,6 +99,9 @@ engagement_urlpatterns = [
     path('misc/tenant-overview-data/', engagement_views.tenant_overview_data_view, name='misc-tenant-overview-data'),
     path('misc/engagement-overview-data/', engagement_views.engagement_overview_data_view, name='misc-engagement-overview-data'),
     path('misc/tenant-statistics/', engagement_views.tenant_statistics_view, name='misc-tenant-statistics'),
+
+    # System Logs
+    path('logs/', log_views.list_logs_view, name='engagement-logs-list'),
 ]
 
 
@@ -151,6 +172,15 @@ common_urlpatterns = [
     path('departments-for-select/', shared_views.departments_for_select_view, name='common-departments-for-select'),
 ]
 
+# Netzwerkreferat URLs (special LDAP role assignments)
+network_urlpatterns = [
+    path('ldap-roles/', network_views.list_ldap_role_assignments_view, name='ldap-role-list'),
+    path('ldap-roles/create/', network_views.create_ldap_role_assignment_view, name='ldap-role-create'),
+    path('ldap-roles/<int:assignment_id>/delete/', network_views.delete_ldap_role_assignment_view, name='ldap-role-delete'),
+    path('ldap-groups/', network_views.list_ldap_groups_view, name='ldap-group-list'),
+    path('ldap-users/', network_views.list_ldap_users_view, name='ldap-user-list'),
+]
+
 # Attendance URLs
 attendance_urlpatterns = [
     path('events/', attendance_views.list_create_events_view, name='attendance-events'),
@@ -173,6 +203,27 @@ attendance_urlpatterns = [
     path('my-history/', attendance_views.my_attendance_history_view, name='attendance-my-history'),
 ]
 
+# Print & Scan URLs (for Pi and Department)
+printing_urlpatterns = [
+    # Pi endpoints (no auth)
+    path('active-session/', printing_views.active_session_view, name='printing-active-session'),
+    path('scans/', printing_views.upload_scan_view, name='printing-upload-scan'),
+    # Pi agent endpoints (outbound polling; shared-token protected)
+    path('agent/commands/', printing_views.agent_commands_view, name='printing-agent-commands'),
+    path('agent/jobs/<str:job_id>/file/', printing_views.agent_job_file_view, name='printing-agent-job-file'),
+    path('agent/jobs/<str:job_id>/status/', printing_views.agent_job_status_view, name='printing-agent-job-status'),
+    # Department management endpoints
+    path('tenant-billing-overview/', printing_views.tenant_billing_overview_view, name='printing-tenant-billing-overview'),
+    path('device/<int:device_id>/overview/', printing_views.device_overview_view, name='printing-device-overview'),
+    path('device/<int:device_id>/statistics/', printing_views.device_statistics_view, name='printing-device-statistics'),
+    path('device/<int:device_id>/settings/', printing_views.device_settings_update_view, name='printing-device-settings'),
+    path('device/<int:device_id>/toggle-active/', printing_views.device_toggle_active_view, name='printing-device-toggle-active'),
+    path('device/<int:device_id>/toggle-sessions/', printing_views.device_toggle_sessions_view, name='printing-device-toggle-sessions'),
+    path('device/<int:device_id>/terminate-session/', printing_views.device_terminate_session_view, name='printing-device-terminate-session'),
+    path('device/<int:device_id>/history/', printing_views.device_history_view, name='printing-device-history'),
+    path('tenant/<int:tenant_id>/settle-debt/', printing_views.settle_tenant_debt_view, name='printing-tenant-settle-debt'),
+]
+
 urlpatterns = [
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
@@ -180,5 +231,7 @@ urlpatterns = [
     path('api/engagements/', include((engagement_urlpatterns, 'engagements'))),
     path('api/department/', include((department_urlpatterns, 'department'))),
     path('api/common/', include((common_urlpatterns, 'common'))),
+    path('api/network/', include((network_urlpatterns, 'network'))),
     path('api/attendance/', include((attendance_urlpatterns, 'attendance'))),
+    path('api/printing/', include((printing_urlpatterns, 'printing'))),
 ]

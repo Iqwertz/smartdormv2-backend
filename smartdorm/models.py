@@ -3,7 +3,16 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-logger = logging.getLogger(__name__) 
+from decimal import Decimal
+import uuid
+
+logger = logging.getLogger(__name__)
+
+
+def generate_external_id():
+    """Generate a unique external ID (UUID hex)"""
+    return uuid.uuid4().hex
+
 class Tenant(models.Model):
     id = models.IntegerField(primary_key=True)
     birthday = models.DateField()
@@ -273,8 +282,34 @@ class DepartmentExtension(models.Model):
 
     class Meta:
         db_table = 't_department_extension'
-        managed = True 
-        
+        managed = True
+
+class LdapRoleAssignment(models.Model):
+    """
+    An LDAP group membership granted by hand from the Netzwerkreferat page.
+
+    Exists so the nightly recalculate_tenant_stats sync knows the membership is
+    intentional: without a record here the sync strips every managed group it cannot
+    derive from floor/department/defaults, so a manual grant would be gone by morning.
+
+    Keyed by LDAP cn instead of a Tenant FK, so one model covers tenants, subtenants
+    and Verwaltung accounts alike, and both phases of the sync can look an assignment
+    up by the username they already hold.
+    """
+    id = models.AutoField(primary_key=True)
+    username = models.CharField(max_length=255, help_text="LDAP cn of the account")
+    display_name = models.CharField(max_length=255, null=True, blank=True, help_text="Snapshot of the account's display name, for the overview list")
+    group_dn = models.CharField(max_length=512, help_text="Full DN of the granted LDAP group")
+    note = models.TextField(null=True, blank=True, help_text="Why this role was granted")
+    expires_at = models.DateField(null=True, blank=True, help_text="Last day the role is valid. Empty means unlimited.")
+    created_by = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_ldap_role_assignment'
+        managed = True
+        unique_together = (('username', 'group_dn'),)
+
 class GlobalAppSettings(models.Model):
     # Singleton model: there should only be one instance of this model.
     id = models.PositiveIntegerField(primary_key=True, default=1, editable=False)
@@ -390,11 +425,14 @@ class BaseAttendanceRecord(models.Model):
     """
     Records manually added base attendance for a tenant at an event.
     This allows migration from the old Excel-based attendance system.
+    
+    Note: The 'parts_count' field stores the number of SESSIONS attended in the old system,
+    not the number of parts within a session.
     """
     id = models.AutoField(primary_key=True)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id', related_name='base_attendance_records')
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='base_attendance_records')
-    parts_count = models.IntegerField(help_text="Number of parts to count as attended")
+    parts_count = models.IntegerField(help_text="Number of sessions attended in the old system (stored as 'parts_count' for database compatibility)")
     note = models.TextField(null=True, blank=True, help_text="Reason for adding base attendance")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -403,3 +441,147 @@ class BaseAttendanceRecord(models.Model):
         db_table = 't_base_attendance_record'
         managed = True
         unique_together = ('tenant', 'event')
+
+# ============================================================================
+# Print & Scan System Models
+
+class Device(models.Model):
+    """Represents a printer/scanner"""
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255, help_text="Name of the printer (e.g. Samsung Xpress C1860FW)")
+    location = models.CharField(max_length=255, help_text="Location (e.g. Creative Department Room)")
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, help_text="Responsible department")
+    is_active = models.BooleanField(default=True, help_text="Global on/off")
+    allow_new_sessions = models.BooleanField(default=True, help_text="Allow new sessions")
+    price_per_page_color = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.10'), help_text="Price per color page in Euro")
+    price_per_page_gray = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.05'), help_text="Price per black & white page in Euro")
+    max_session_duration_minutes = models.IntegerField(default=30, help_text="Maximum session duration in minutes")
+    cups_printer_name = models.CharField(max_length=255, help_text="Name of the printer in CUPS (e.g. Samsung_C1860_Series)")
+    ip_address = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="IP address or hostname of the Raspberry Pi running CUPS and the scan service (e.g. 10.50.0.15). Falls back to CUPS_SERVER setting when empty.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_device'
+        verbose_name = "Device"
+        verbose_name_plural = "Devices"
+
+    def __str__(self):
+        return f"{self.name} ({self.location})"
+
+class PrintSession(models.Model):
+    """Active or past print/scan sessions"""
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        COMPLETED = 'COMPLETED', 'Completed'
+        EXPIRED = 'EXPIRED', 'Expired'
+        TERMINATED = 'TERMINATED', 'Terminated'
+    
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    pending_scan = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Set when a scan is requested; the Pi agent reads it, scans, uploads, then it is cleared. Example: {'resolution': 300, 'mode': 'Color', 'source': 'Flatbed'}",
+    )
+    
+    class Meta:
+        db_table = 't_print_session'
+        verbose_name = "Print Session"
+        verbose_name_plural = "Print Sessions"
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f"Session {self.external_id[:8]} - {self.tenant.get_full_name()} ({self.status})"
+
+class PrintJob(models.Model):
+    """Individual print jobs"""
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PRINTING = 'PRINTING', 'Printing'
+        COMPLETED = 'COMPLETED', 'Completed'
+        FAILED = 'FAILED', 'Failed'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+    
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(PrintSession, on_delete=models.CASCADE, db_column='session_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    filename = models.CharField(max_length=255)
+    color_mode = models.CharField(max_length=10, default='Color', choices=[('Color', 'Color'), ('Gray', 'Gray')], help_text="Color mode used for this job")
+    copies = models.IntegerField(default=1, help_text="Number of copies requested (needed by the Pi agent to print)")
+    document = models.FileField(
+        upload_to='print_jobs/',
+        null=True,
+        blank=True,
+        help_text="Uploaded PDF to be fetched and printed by the Pi agent.",
+    )
+    pages = models.IntegerField(null=True, blank=True, help_text="Number of printed pages (updated after printing)")
+    cost = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Cost in Euro (only for COMPLETED)")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this job was settled/paid by administration. NULL = still outstanding."
+    )
+    error_message = models.TextField(null=True, blank=True)
+    cups_job_id = models.CharField(max_length=255, null=True, blank=True, help_text="CUPS Job ID for status query")
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_print_job'
+        verbose_name = "Print Job"
+        verbose_name_plural = "Print Jobs"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Job {self.external_id[:8]} - {self.filename} ({self.status})"
+    
+    def save(self, *args, **kwargs):
+        # Calculate cost only for COMPLETED, otherwise 0
+        if self.status == 'COMPLETED' and self.pages and self.device:
+            # Use color or gray price depending on color_mode
+            if self.color_mode == 'Color':
+                price_per_page = self.device.price_per_page_color
+            else:
+                price_per_page = self.device.price_per_page_gray
+            self.cost = Decimal(str(self.pages)) * price_per_page
+            # Log the calculation for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"PrintJob.save() calculated cost: pages={self.pages}, color_mode={self.color_mode}, price_per_page={price_per_page}, cost={self.cost}")
+        elif self.status != 'COMPLETED':
+            self.cost = Decimal('0.00')
+        super().save(*args, **kwargs)
+
+class Scan(models.Model):
+    """Scanned documents (temporarily stored)"""
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(PrintSession, on_delete=models.CASCADE, db_column='session_id')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, db_column='tenant_id')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, db_column='device_id')
+    filename = models.CharField(max_length=255)
+    file_path = models.CharField(max_length=500, help_text="Relative path to temporary storage (scans/temp/session_XXX/...)")
+    scanned_at = models.DateTimeField(auto_now_add=True)
+    external_id = models.CharField(max_length=255, unique=True, default=generate_external_id)
+    
+    class Meta:
+        db_table = 't_scan'
+        verbose_name = "Scan"
+        verbose_name_plural = "Scans"
+        ordering = ['-scanned_at']
+
+    def __str__(self):
+        return f"Scan {self.external_id[:8]} - {self.filename}"

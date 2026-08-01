@@ -377,17 +377,54 @@ def manual_override_view(request, session_id):
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 def my_attendance_history_view(request):
     """
-    Returns attendance history for the logged-in tenant.
+    Returns attendance history for the logged-in tenant, including both regular and base attendance records.
     """
     try:
         tenant = Tenant.objects.get(username=request.user.username)
     except Tenant.DoesNotExist:
         return Response([]) # Non-tenant users simply have no history
-        
-    records = AttendanceRecord.objects.filter(tenant=tenant).select_related('session__event').order_by('-session__date', 'part')
     
-    serializer = AttendanceRecordSerializer(records, many=True)
-    return Response(serializer.data)
+    # Get regular attendance records
+    records = AttendanceRecord.objects.filter(tenant=tenant).select_related('session__event').order_by('-session__date', 'part')
+    serialized_records = AttendanceRecordSerializer(records, many=True).data
+    
+    # Convert to list and add is_base_attendance flag
+    combined_data = []
+    for record in serialized_records:
+        record['is_base_attendance'] = False
+        combined_data.append(record)
+    
+    # Get base attendance records and create a single record per base attendance entry
+    base_records = BaseAttendanceRecord.objects.filter(tenant=tenant).select_related('event').order_by('-created_at')
+    
+    for base_record in base_records:
+        # Create a single record representing all base attendance sessions
+        virtual_record = {
+            'id': None,
+            'tenant': base_record.tenant_id,
+            'tenant_name': tenant.get_full_name(),
+            'session': None,
+            'part': 1,
+            'timestamp': base_record.created_at.isoformat(),
+            'is_manual_override': False,
+            'session_date': None,
+            'session_title': None,
+            'event_name': base_record.event.name,
+            'event_parts_count': base_record.event.parts_count,
+            'event_required_parts': base_record.event.required_parts,
+            'is_base_attendance': True,
+            'base_attendance_sessions_count': base_record.parts_count,
+            'base_attendance_note': base_record.note,
+        }
+        combined_data.append(virtual_record)
+    
+    # Sort combined data by date (most recent first)
+    combined_data.sort(
+        key=lambda x: x['timestamp'],
+        reverse=True
+    )
+    
+    return Response(combined_data)
 
 
 @api_view(['GET'])

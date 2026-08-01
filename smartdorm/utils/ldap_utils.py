@@ -278,10 +278,14 @@ def delete_ldap_user(username):
         if 'con' in locals() and con:
             con.unbind_s()
 
-def find_ldap_user_by_email(email):
+def find_ldap_user_by_email(email, employee_type=None):
     """
     Finds an LDAP user by email address.
     Returns (username, full_name) if found, (None, None) if not found.
+
+    An email address is not unique across account types - a former subtenant who later
+    became a tenant has both accounts under the same address. Pass employee_type
+    ('TENANT', 'SUBTENANT', ...) to restrict the search to one kind of account.
     """
     ldap_uri = settings.AUTH_LDAP_SERVER_URI
     admin_dn = settings.AUTH_LDAP_BIND_DN
@@ -294,7 +298,10 @@ def find_ldap_user_by_email(email):
         con.simple_bind_s(admin_dn, admin_password)
 
         # Search for user by email
-        search_filter = f"(mail={email})"
+        if employee_type:
+            search_filter = f"(&(mail={email})(employeeType={employee_type}))"
+        else:
+            search_filter = f"(mail={email})"
         result = con.search_s(user_base_dn, ldap.SCOPE_SUBTREE, search_filter, ['cn', 'givenName', 'sn'])
         
         if result:
@@ -318,6 +325,65 @@ def find_ldap_user_by_email(email):
         if 'con' in locals() and con:
             con.unbind_s()
             
+def update_ldap_user_attributes(username, email=None, first_name=None, last_name=None):
+    """
+    Updates LDAP user attributes (email, first name, last name).
+    Only updates attributes that are provided (not None).
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        mod_list = []
+
+        if email is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'mail', [email.encode('utf-8')]))
+
+        if first_name is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'givenName', [first_name.encode('utf-8')]))
+
+        if last_name is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'sn', [last_name.encode('utf-8')]))
+
+        # Update displayName if either first_name or last_name is provided
+        if first_name is not None or last_name is not None:
+            # Need to fetch current values if only one is provided
+            if first_name is None or last_name is None:
+                result = con.search_s(user_dn, ldap.SCOPE_BASE, attrlist=['givenName', 'sn'])
+                dn, attrs = result[0]
+                if first_name is None:
+                    first_name = attrs.get('givenName', [b''])[0].decode('utf-8')
+                if last_name is None:
+                    last_name = attrs.get('sn', [b''])[0].decode('utf-8')
+
+            display_name = f"{first_name} {last_name}".strip()
+            mod_list.append((ldap.MOD_REPLACE, 'displayName', [display_name.encode('utf-8')]))
+
+        if mod_list:
+            con.modify_s(user_dn, mod_list)
+            logger.info(f"Successfully updated LDAP attributes for user '{username}'")
+            return True
+        else:
+            logger.info(f"No attributes to update for user '{username}'")
+            return True
+
+    except ldap.NO_SUCH_OBJECT:
+        logger.error(f"Failed to update LDAP user: User '{username}' does not exist.")
+        raise ValueError(f"User '{username}' does not exist in LDAP.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during attribute update for '{username}': {e}")
+        raise ConnectionError(f"Could not update LDAP attributes: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
 def ldap_username_exists(username):
     """
     Checks if a username exists in the LDAP directory.
@@ -346,6 +412,138 @@ def ldap_username_exists(username):
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during username existence check for '{username}': {e}")
         raise ConnectionError(f"Could not check username in the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+# The OUs that hold groups. Same three bases the nightly sync searches and the same
+# union as AUTH_LDAP_GROUP_SEARCH in settings - the LDAP tree is split up this way
+# because other services share the directory.
+GROUP_BASE_DNS = [
+    "ou=groups,dc=schollheim,dc=net",
+    "ou=groups2,dc=schollheim,dc=net",
+    "ou=roles,dc=schollheim,dc=net",
+]
+
+def list_ldap_groups():
+    """
+    Lists every group in the directory as [{'cn', 'dn', 'ou'}], sorted by cn.
+
+    Read straight from LDAP rather than from a hardcoded list so the role dropdown
+    always reflects what actually exists.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+
+    groups = []
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        for base_dn in GROUP_BASE_DNS:
+            try:
+                results = con.search_s(base_dn, ldap.SCOPE_SUBTREE, "(objectClass=groupOfNames)", ['cn'])
+            except ldap.NO_SUCH_OBJECT:
+                # An OU that does not exist in this environment is not an error.
+                continue
+
+            ou_label = base_dn.split(',')[0].split('=')[1]
+            for dn, attrs in results:
+                if not dn or 'cn' not in attrs:
+                    continue
+                groups.append({
+                    'cn': attrs['cn'][0].decode('utf-8'),
+                    'dn': dn,
+                    'ou': ou_label,
+                })
+
+        groups.sort(key=lambda g: g['cn'].lower())
+        return groups
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while listing groups: {e}")
+        raise ConnectionError(f"Could not list groups from the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def list_ldap_users():
+    """
+    Lists every account under ou=users as [{'username', 'display_name', 'email',
+    'employee_type'}], sorted by display name.
+
+    Covers tenants, subtenants and Verwaltung accounts alike, which the Tenant table
+    alone does not.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+
+    def _first(attrs, key):
+        return attrs[key][0].decode('utf-8') if key in attrs and attrs[key] else None
+
+    users = []
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        results = con.search_s(
+            user_base_dn,
+            ldap.SCOPE_SUBTREE,
+            "(objectClass=inetOrgPerson)",
+            ['cn', 'displayName', 'sn', 'mail', 'employeeType']
+        )
+
+        for dn, attrs in results:
+            if not dn or 'cn' not in attrs:
+                continue
+            username = _first(attrs, 'cn')
+            users.append({
+                'username': username,
+                'display_name': _first(attrs, 'displayName') or _first(attrs, 'sn') or username,
+                'email': _first(attrs, 'mail'),
+                'employee_type': _first(attrs, 'employeeType'),
+            })
+
+        users.sort(key=lambda u: (u['display_name'] or '').lower())
+        return users
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while listing users: {e}")
+        raise ConnectionError(f"Could not list users from the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def ldap_group_exists(group_dn):
+    """
+    Checks whether a group DN exists.
+
+    Needed before granting a manually typed DN: add_user_to_group() reports success on
+    NO_SUCH_OBJECT, so a typo would otherwise be stored as a working assignment.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        try:
+            con.search_s(group_dn, ldap.SCOPE_BASE)
+            return True
+        except (ldap.NO_SUCH_OBJECT, ldap.INVALID_DN_SYNTAX):
+            return False
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error during group existence check for '{group_dn}': {e}")
+        raise ConnectionError(f"Could not check group in the authentication server: {e}")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()

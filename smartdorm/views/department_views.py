@@ -19,6 +19,7 @@ from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
+from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, SUBTENANT_EMPLOYEE_TYPE
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
 
@@ -90,11 +91,18 @@ def get_tenant_detail_view(request, tenant_id):
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
 def update_tenant_view(request, tenant_id):
     update_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     update_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
+    
+    # Store old values to detect changes
+    old_email = tenant.email
+    old_name = tenant.name
+    old_surname = tenant.surname
+    
     # Exclude non-editable fields from the request data before validation
     request.data.pop('current_room', None)
     request.data.pop('move_in', None)
@@ -102,6 +110,36 @@ def update_tenant_view(request, tenant_id):
     serializer = TenantSerializer(tenant, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
+        
+        # Check if email, name, or surname changed and update LDAP
+        if tenant.username and (
+            tenant.email != old_email or 
+            tenant.name != old_name or 
+            tenant.surname != old_surname
+        ):
+            try:
+                name_changed = tenant.name != old_name
+                surname_changed = tenant.surname != old_surname
+                
+                ldap_utils.update_ldap_user_attributes(
+                    username=tenant.username,
+                    email=tenant.email if tenant.email != old_email else None,
+                    first_name=tenant.name if name_changed else None,
+                    last_name=tenant.surname if surname_changed else None
+                )
+                logger.info(f"Successfully updated LDAP attributes for tenant '{tenant.username}'")
+            except (ValueError, ConnectionError) as e:
+                logger.error(f"Failed to update LDAP for tenant '{tenant.username}': {e}", exc_info=True)
+                # Log warning but don't fail the entire operation - DB was successfully updated
+                return Response(
+                    {
+                        "message": "Tenant updated successfully, but LDAP sync failed. Manual synchronization may be needed.",
+                        "data": serializer.data,
+                        "ldap_error": str(e)
+                    },
+                    status=status.HTTP_200_OK
+                )
+        
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -216,15 +254,17 @@ def delete_rental_view(request, rental_id):
     # Update LDAP floor groups if the floor changed
     try:
         if old_floor != new_floor:
-            group_base_dn = "ou=groups2,dc=schollheim,dc=net"
-            if old_floor:
-                old_group_dn = f"cn={old_floor},{group_base_dn}"
+            old_group_dn = floor_group_dn(old_floor)
+            if old_group_dn:
                 ldap_utils.remove_user_from_group(tenant.username, old_group_dn)
                 logger.info(f"Removed user '{tenant.username}' from LDAP group for floor '{old_floor}'.")
-            if new_floor:
-                new_group_dn = f"cn={new_floor},{group_base_dn}"
+            new_group_dn = floor_group_dn(new_floor)
+            if new_group_dn:
                 ldap_utils.add_user_to_group(tenant.username, new_group_dn)
                 logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+
+            # Subtenants live in the tenant's room, so their floor group follows along
+            sync_subtenant_floor_groups(tenant, old_floor, new_floor)
     except Exception as e:
         logger.error(
             f"Error updating LDAP groups for tenant '{tenant.username}' during rental deletion: {e}",
@@ -291,14 +331,17 @@ def move_tenant_view(request, tenant_id):
     #Update floor LDAP group
     try:
         if old_floor != new_floor:
-            group_base_dn = "ou=groups2,dc=schollheim,dc=net"
-            if old_floor:
-                old_group_dn = f"cn={old_floor},{group_base_dn}"
+            old_group_dn = floor_group_dn(old_floor)
+            if old_group_dn:
                 ldap_utils.remove_user_from_group(tenant.username, old_group_dn)
                 logger.info(f"Removed user '{tenant.username}' from LDAP group for floor '{old_floor}'.")
-            new_group_dn = f"cn={new_floor},{group_base_dn}"
-            ldap_utils.add_user_to_group(tenant.username, new_group_dn)
-            logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+            new_group_dn = floor_group_dn(new_floor)
+            if new_group_dn:
+                ldap_utils.add_user_to_group(tenant.username, new_group_dn)
+                logger.info(f"Added user '{tenant.username}' to LDAP group for floor '{new_floor}'.")
+
+            # Subtenants live in the tenant's room, so their floor group follows along
+            sync_subtenant_floor_groups(tenant, old_floor, new_floor)
     except Exception as e:
         logger.error(f"Error updating LDAP groups for tenant '{tenant.username}' during move: {e}", exc_info=True)
     
@@ -336,9 +379,13 @@ def create_new_tenant_view(request):
 
     # 2. Create user in LDAP
     try:
-        ldap_groups = app_config.DEFAULT_TENANT_LDAP_GROUPS
+        # Copy, never mutate the config constant - it is read again by every later
+        # tenant creation in this process and by recalculate_tenant_stats.
+        ldap_groups = list(app_config.DEFAULT_TENANT_LDAP_GROUPS)
         #Add the users FLOOR as a LDAP group
-        ldap_groups.append(f"cn={floor},ou=groups2,dc=schollheim,dc=net")
+        tenant_floor_group_dn = floor_group_dn(floor)
+        if tenant_floor_group_dn:
+            ldap_groups.append(tenant_floor_group_dn)
         ldap_utils.create_ldap_user(
             username=username,
             password=password,
@@ -445,7 +492,11 @@ def create_subtenant_view(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     data = serializer.validated_data
-    
+
+    # A subtenant lives in the main tenant's room, so they belong in that floor's group
+    main_tenant = get_object_or_404(Tenant, id=data['tenant_id'])
+    subtenant_floor_group_dn = floor_group_dn(main_tenant.current_floor)
+
     base_username = (data['name'] + " " + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss') # subtenant username format is diffrent from tenant to avoid conflicts
     username = base_username
     counter = 1
@@ -465,15 +516,55 @@ def create_subtenant_view(request):
          
     if is_new_subtenant:
         try:
+            # Copy, never mutate the config constant
+            ldap_groups = list(app_config.DEFAULT_SUBTENANT_LDAP_GROUPS)
+            if subtenant_floor_group_dn:
+                ldap_groups.append(subtenant_floor_group_dn)
+
             ldap_utils.create_ldap_user(
                 username=username, password=password, first_name=data['name'],
                 last_name=data['surname'], email=data['email'],
-                group_dns=app_config.DEFAULT_SUBTENANT_LDAP_GROUPS,
+                group_dns=ldap_groups,
                 userType="SUBTENANT"
             )
         except (ValueError, ConnectionError) as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+    else:
+        # Returning subtenant: the LDAP account already exists, but it may sit on the
+        # wrong floor (or none at all) from a previous sublet. Look the account up by
+        # email, since the username generated above ignores any numeric suffix that was
+        # appended when it was originally created. Restricted to SUBTENANT accounts -
+        # a returning subtenant's email often also belongs to a tenant account.
+        try:
+            existing_username, _ = ldap_utils.find_ldap_user_by_email(
+                data['email'], employee_type=SUBTENANT_EMPLOYEE_TYPE
+            )
+            if not existing_username:
+                logger.warning(
+                    f"No subtenant LDAP account found for returning subtenant '{data['email']}'. "
+                    f"Floor group could not be assigned."
+                )
+            elif Tenant.objects.filter(username=existing_username).exists():
+                logger.warning(
+                    f"LDAP account '{existing_username}' for subtenant '{data['email']}' belongs "
+                    f"to a main tenant. Skipping group assignment."
+                )
+            else:
+                for group_dn in app_config.DEFAULT_SUBTENANT_LDAP_GROUPS:
+                    ldap_utils.add_user_to_group(existing_username, group_dn)
+                if subtenant_floor_group_dn:
+                    ldap_utils.add_user_to_group(existing_username, subtenant_floor_group_dn)
+                    logger.info(
+                        f"Added returning subtenant '{existing_username}' to LDAP group for "
+                        f"floor '{main_tenant.current_floor}'."
+                    )
+        except Exception as e:
+            # Never fail the request over a group assignment - the nightly sync heals it.
+            logger.error(
+                f"Error assigning LDAP groups to returning subtenant '{data['email']}': {e}",
+                exc_info=True
+            )
+
     try:
         max_id_result = Subtenant.objects.aggregate(max_id=Max('id'))
         new_id = (max_id_result['max_id'] or 0) + 1
@@ -566,12 +657,25 @@ def update_subtenant_view(request, subtenant_id):
     serializer = NewSubtenantSerializer(data=request.data, partial=True)
     if serializer.is_valid():
         data = serializer.validated_data
+        # Reassigning the subtenant to a different main tenant also moves their floor
+        old_floor = subtenant.tenant.current_floor
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
-        
+
+        new_tenant = Tenant.objects.filter(id=subtenant.tenant_id).first()
+        new_floor = new_tenant.current_floor if new_tenant else None
+        if old_floor != new_floor:
+            try:
+                apply_subtenant_floor_group(subtenant, old_floor, new_floor)
+            except Exception as e:
+                logger.error(
+                    f"Error updating LDAP floor group for subtenant '{subtenant.email}': {e}",
+                    exc_info=True
+                )
+
         recalculate_tenant_contract_dates(subtenant.tenant)
-        
+
         return Response(SubtenantSerializer(subtenant).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -584,17 +688,21 @@ def delete_subtenant_view(request, subtenant_id):
     delete_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
     
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
+    # Hold on to the main tenant: their sublet total has to be recalculated after the
+    # subtenant row is gone, and subtenant.tenant is no longer reachable by then.
+    main_tenant = subtenant.tenant
     #Reconstruct the username to delete, not the cleanest way since it assumes that the username isnt incremented when creating subtenants, however with the low amount of subtenants it is very unlikely to happen.
     username_to_delete = (subtenant.name + " " + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
                                                                                                                                                         )
     if not username_to_delete:
         subtenant.delete()
+        recalculate_tenant_contract_dates(main_tenant)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     try:
         ldap_utils.delete_ldap_user(username_to_delete)
         subtenant.delete()
-        recalculate_tenant_contract_dates(tenant)
+        recalculate_tenant_contract_dates(main_tenant)
         logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
         return Response(status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:

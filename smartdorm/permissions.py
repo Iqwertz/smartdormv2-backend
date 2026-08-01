@@ -18,6 +18,27 @@ class HasGroupPermission(BasePermission):
         user_groups = [group.name for group in request.user.groups.all()]
         return any(group in user_groups for group in required_groups)
 
+def group_required(*groups):
+    """
+    Builds a permission class with the allowed groups baked into it.
+
+    Use this instead of setting `required_groups` on the view function: @api_view returns
+    the function produced by as_view(), so an attribute set on it never reaches the
+    APIView instance that HasGroupPermission inspects - the requirement is silently
+    ignored and the endpoint ends up open to every authenticated user.
+    """
+    allowed_groups = list(groups)
+
+    class RequiredGroupsPermission(BasePermission):
+        def has_permission(self, request, view):
+            if not request.user or not request.user.is_authenticated:
+                return False
+
+            user_groups = [group.name for group in request.user.groups.all()]
+            return any(group in user_groups for group in allowed_groups)
+
+    return RequiredGroupsPermission
+
 class HasUserTypePermission(BasePermission):
     """
     Ensures the user has one of the required user types. Mostly used to differentiate between Tenant and Verwaltung, but could be used to handle subtenants as well...
