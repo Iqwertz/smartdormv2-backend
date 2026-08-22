@@ -10,6 +10,7 @@ from .views import (
     network_views,
     parcel_views,
     shared_views,
+    subtenant_views,
     attendance_views,
     printing_views,
 )
@@ -21,6 +22,12 @@ auth_urlpatterns = [
     path('me/', auth_views.me_view, name='api-me'),
     path('password-reset/', auth_views.password_reset_view, name='api-password-reset'),
     path('password-change/', auth_views.password_change_view, name='api-password-change'),
+]
+
+# Subtenant dashboard URLs (the subtenant's own account - not the Verwaltung's
+# subtenant management below, which lives under api/department/subtenants/)
+my_subtenant_urlpatterns = [
+    path('profile-data/', subtenant_views.my_profile_view, name='subtenant-profile-data'),
 ]
 
 # Parcel-related URLs
@@ -228,6 +235,7 @@ urlpatterns = [
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
     path('api/tenants/', include((tenant_urlpatterns, 'tenants'))),
+    path('api/subtenant/', include((my_subtenant_urlpatterns, 'subtenant'))),
     path('api/engagements/', include((engagement_urlpatterns, 'engagements'))),
     path('api/department/', include((department_urlpatterns, 'department'))),
     path('api/common/', include((common_urlpatterns, 'common'))),

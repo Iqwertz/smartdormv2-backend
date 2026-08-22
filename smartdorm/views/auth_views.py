@@ -14,6 +14,7 @@ from pprint import pprint
 from django.contrib.auth.models import User
 from ..models import Tenant
 from ..utils.email_utils import send_email_message
+from ..utils.subtenant_utils import is_subtenant_account
 from ..utils.ldap_utils import update_ldap_password, find_ldap_user_by_email
 import logging
 
@@ -32,7 +33,11 @@ def get_user_data(user):
         "groups": group_names,
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
-        "user_type": user.first_name #Tenant or Verwaltung, uses first_name field for employeeType (see settings.py)
+        "user_type": user.first_name, #Tenant or Verwaltung, uses first_name field for employeeType (see settings.py)
+        # Drives the frontend's routing: subtenants only get their own dashboard. Computed
+        # rather than read off user_type, which is TENANT on subtenant accounts created
+        # before employeeType was stamped - see is_subtenant_account().
+        "is_subtenant": is_subtenant_account(user),
     }
 
 @api_view(['POST'])

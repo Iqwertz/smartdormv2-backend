@@ -50,6 +50,43 @@ class SubtenantSerializer(serializers.ModelSerializer):
             return obj.room.name
         return None
 
+class SubtenantProfileSerializer(serializers.ModelSerializer):
+    """
+    What a subtenant may see about their own sublet. Deliberately narrower than
+    SubtenantSerializer, which serialises the whole record including internal ids.
+    """
+    tenant_name = serializers.SerializerMethodField(read_only=True)
+    room_name = serializers.SerializerMethodField(read_only=True)
+    duration_months = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Subtenant
+        fields = [
+            'name', 'surname', 'email', 'move_in', 'move_out',
+            'duration_months', 'university_confirmation', 'tenant_name', 'room_name',
+        ]
+
+    def get_tenant_name(self, obj):
+        if obj.tenant:
+            return f"{obj.tenant.name} {obj.tenant.surname}"
+        return None
+
+    def get_room_name(self, obj):
+        if obj.room:
+            return obj.room.name
+        return None
+
+    def get_duration_months(self, obj):
+        """
+        Length of the sublet in months, derived from the dates.
+
+        The `duration` column is not used: it is a legacy field that create_subtenant_view
+        does not write, so it sits at its 0.0 default on every record created since.
+        """
+        if not obj.move_in or not obj.move_out or obj.move_out <= obj.move_in:
+            return None
+        return round((obj.move_out - obj.move_in).days / 30.44, 1)
+
 class NewSubtenantSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     surname = serializers.CharField(max_length=255)

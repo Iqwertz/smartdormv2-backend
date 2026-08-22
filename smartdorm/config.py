@@ -25,3 +25,13 @@ DEFAULT_SUBTENANT_LDAP_GROUPS = [
     'cn=wlan,ou=groups,dc=schollheim,dc=net',
     'cn=wiki,ou=groups,dc=schollheim,dc=net', 
 ]
+
+# --- Subtenant Access Settings ---
+# Subtenants hold an account for the wlan and the wiki and have no business with the
+# rest of SmartDorm, so SubtenantApiGuardMiddleware denies them every API path that is
+# not listed here. Default-deny on purpose: an endpoint added later is closed to
+# subtenants until someone opens it deliberately.
+SUBTENANT_ALLOWED_API_PREFIXES = [
+    '/api/auth/',       # session handling and the user's own password
+    '/api/subtenant/',  # the subtenant dashboard's own data
+]
