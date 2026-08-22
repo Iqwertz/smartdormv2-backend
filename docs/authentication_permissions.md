@@ -63,4 +63,40 @@ Views can also restrict access based on the user's `employeeType` from LDAP (whi
     ```
 *   **Logic**: The permission class checks if the user's `employeeType` is present in the `required_employee_types` list.
 
+### 3. Subtenant Accounts
+
+Subtenants (`Untermieter`) get an LDAP account so they can use the wlan and the wiki, but
+they are not residents and must not see resident data.
+
+*   **Marking**: `create_subtenant_view` stamps their LDAP account with `employeeType=SUBTENANT`
+    and adds them only to the groups in `config.DEFAULT_SUBTENANT_LDAP_GROUPS` (`wlan`, `wiki`)
+    plus their floor group. They never get the `tenant` role.
+*   **Recognising them**: `utils/subtenant_utils.is_subtenant_account()`. Accounts created
+    before the `employeeType` stamping was introduced (October 2025) carry `TENANT`, so the
+    helper falls back to the shape of the data: no `Tenant` row for the username, but a
+    running sublet on the email address. `GET /api/auth/me/` exposes the result as
+    `is_subtenant`, which is what the frontend routes on.
+*   **Their own record**: `t_subtenant` has no username column, so a logged-in subtenant is
+    matched to their record by **email**, restricted to the sublet that is currently running
+    (`utils/subtenant_utils.get_current_subtenant()`).
+
+#### Enforcement: `SubtenantApiGuardMiddleware`
+
+Because `required_groups` / `required_employee_types` are silently ignored on `@api_view`
+endpoints (see above), most endpoints currently resolve to "any authenticated user" - which
+would include subtenants. Rather than relying on ~100 individual declarations,
+`smartdorm/middleware.py` denies subtenant accounts **every** path under `/api/` that is not
+listed in `config.SUBTENANT_ALLOWED_API_PREFIXES`:
+
+```python
+SUBTENANT_ALLOWED_API_PREFIXES = [
+    '/api/auth/',       # session handling and the user's own password
+    '/api/subtenant/',  # the subtenant dashboard's own data
+]
+```
+
+This is default-deny: **an endpoint added later is closed to subtenants until someone opens
+it deliberately.** The `IsSubtenant` / `IsNotSubtenant` permission classes in `permissions.py`
+are available for view-level checks on top of that.
+
 By combining these two checks, the system provides granular control over who can access what data and perform which actions.

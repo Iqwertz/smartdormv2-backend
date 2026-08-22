@@ -62,3 +62,31 @@ class GroupAndEmployeeTypePermission(HasGroupPermission, HasUserTypePermission):
     def has_permission(self, request, view):
         return HasGroupPermission.has_permission(self, request, view) and \
                HasUserTypePermission.has_permission(self, request, view)
+
+# --- Subtenant permissions ---
+# Built as real permission classes rather than declared via `required_employee_types`,
+# which has no effect on @api_view endpoints for the same reason `required_groups`
+# does not - see group_required() above.
+
+class IsSubtenant(BasePermission):
+    """Allows only accounts that belong to a subtenant."""
+
+    def has_permission(self, request, view):
+        from .utils.subtenant_utils import is_subtenant_account
+
+        return is_subtenant_account(request.user)
+
+
+class IsNotSubtenant(BasePermission):
+    """
+    Blocks subtenant accounts. Rarely needed on individual views - SubtenantApiGuardMiddleware
+    already denies every API path that is not explicitly opened to subtenants.
+    """
+
+    def has_permission(self, request, view):
+        from .utils.subtenant_utils import is_subtenant_account
+
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        return not is_subtenant_account(request.user)

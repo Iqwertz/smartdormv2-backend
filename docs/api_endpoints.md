@@ -17,6 +17,11 @@ This document provides a high-level overview of the API structure. All endpoints
 *   `GET/POST/DELETE /engagement-application/...`: Endpoints for creating, viewing, and deleting engagement applications.
 *   `GET /global-settings/`: Retrieves the current global application settings (e.g., current semester).
 
+### Subtenant-Facing Endpoints (`/api/subtenant/`)
+*Endpoints used by logged-in subtenants. Subtenant accounts are restricted to this
+namespace plus `/api/auth/` - see [Authentication & Permissions](./authentication_permissions.md).*
+*   `GET /profile-data/`: Retrieves the subtenant's own running sublet (name, room, main tenant, dates, duration). Returns 404 once the sublet has ended, while the LDAP account keeps working.
+
 ### Department & Admin Endpoints (`/api/department/`)
 *Endpoints used by administration (`Verwaltung`), department members, and other privileged roles.*
 *   **Tenant Management**:
