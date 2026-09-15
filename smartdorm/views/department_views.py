@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Max, Q
+from django.db.models import Max, OuterRef, Q, Subquery
 from datetime import timedelta, date
 import uuid
 from django.shortcuts import get_object_or_404
@@ -16,7 +16,7 @@ from dateutil.relativedelta import relativedelta
 import re
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
+from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension, Membership
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
 from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, SUBTENANT_EMPLOYEE_TYPE
@@ -67,7 +67,14 @@ def all_tenant_data_view(request):
         )
 
     try:
-        ordered_tenants = tenants.order_by('surname', 'name')
+        # Surface the HSV Beitrittsdatum as a column here. A subquery rather than a join so
+        # tenants without a membership still appear, and so the shared TenantSerializer keeps
+        # costing nothing extra everywhere else it is used.
+        ordered_tenants = tenants.annotate(
+            membership_joined_on=Subquery(
+                Membership.objects.filter(tenant=OuterRef('pk')).values('joined_on')[:1]
+            )
+        ).order_by('surname', 'name')
         serializer = TenantSerializer(ordered_tenants, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
@@ -1024,7 +1031,17 @@ def close_departure_view(request, departure_id):
 
     departure.status = Departure.Status.CLOSED
     departure.save()
-    
+
+    # The HSV membership ends automatically with the Mietverhältnis - the Beitrittserklärung
+    # says so explicitly and requires no separate Austrittserklärung from the member.
+    membership = Membership.objects.filter(tenant=departure.tenant, ended_on__isnull=True).first()
+    if membership:
+        membership.end_membership(departure.tenant.move_out)
+        logger.info(
+            "HSV membership of tenant %s ended on %s because their departure was closed.",
+            departure.tenant.id, departure.tenant.move_out,
+        )
+
     #Send email to tenant
     email_utils.send_email_message(
         recipient_list=[departure.tenant.email],

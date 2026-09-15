@@ -13,6 +13,7 @@ from .views import (
     subtenant_views,
     attendance_views,
     printing_views,
+    membership_views,
 )
 
 # Auth-related URLs
@@ -231,6 +232,29 @@ printing_urlpatterns = [
     path('tenant/<int:tenant_id>/settle-debt/', printing_views.settle_tenant_debt_view, name='printing-tenant-settle-debt'),
 ]
 
+# HSV e.V. membership URLs. Separate namespace because the Verein is a different legal
+# entity than the Schollheim e.V. whose data the other namespaces manage.
+membership_urlpatterns = [
+    # Tenant-facing
+    path('my-status/', membership_views.my_membership_status_view, name='membership-my-status'),
+    path('terms/', membership_views.membership_terms_view, name='membership-terms'),
+    path('apply/', membership_views.apply_for_membership_view, name='membership-apply'),
+    path('opt-out/', membership_views.opt_out_view, name='membership-opt-out'),
+    path('opt-out/undo/', membership_views.undo_opt_out_view, name='membership-opt-out-undo'),
+    # Review (Zimmerreferat / Finanzenreferat / Heimrat)
+    path('applications/', membership_views.list_applications_view, name='membership-applications'),
+    path('applications/<int:application_id>/decide/', membership_views.decide_application_view, name='membership-decide'),
+    path('applications/<int:application_id>/pdf/', membership_views.application_pdf_view, name='membership-application-pdf'),
+    path('members/', membership_views.list_members_view, name='membership-members'),
+    path('members/<int:tenant_id>/iban/', membership_views.reveal_iban_view, name='membership-reveal-iban'),
+    path('members/<int:tenant_id>/mandate/', membership_views.update_mandate_view, name='membership-update-mandate'),
+    # SEPA collection (Finanzenreferat)
+    path('direct-debit/preview/', membership_views.preview_direct_debit_view, name='membership-dd-preview'),
+    path('direct-debit/create/', membership_views.create_direct_debit_view, name='membership-dd-create'),
+    path('direct-debit/runs/', membership_views.list_direct_debit_runs_view, name='membership-dd-runs'),
+    path('direct-debit/<int:run_id>/xml/', membership_views.download_direct_debit_view, name='membership-dd-download'),
+]
+
 urlpatterns = [
 
     path('api/auth/', include((auth_urlpatterns, 'auth'))),
@@ -242,4 +266,5 @@ urlpatterns = [
     path('api/network/', include((network_urlpatterns, 'network'))),
     path('api/attendance/', include((attendance_urlpatterns, 'attendance'))),
     path('api/printing/', include((printing_urlpatterns, 'printing'))),
+    path('api/membership/', include((membership_urlpatterns, 'membership'))),
 ]

@@ -1,0 +1,20 @@
+{% extends "email/membership-base.html" %}
+{% block content %}
+<p style="font-family:Verdana, sans-serif;font-size:15px;font-weight:bold;line-height:18px;margin: 0 0 16px;color:#2d2d2d;padding-bottom:12px;">Willkommen im HSV e.V., {{ tenant.name }}!</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Dein Antrag wurde genehmigt. Deine Mitgliedschaft im Studierendenwohnheim Geschwister Scholl Heimselbstverwaltung e.V. beginnt am <strong>{{ membership.joined_on|date:"d.m.Y" }}</strong>.</p>
+
+{% if is_sepa %}
+<p style="font-family:Verdana, sans-serif;font-size:15px;font-weight:bold;line-height:18px;margin: 0 0 16px;color:#2d2d2d;padding-bottom:12px;">Dein SEPA-Lastschriftmandat</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Mandatsreferenz: <strong>{{ membership.mandate_reference }}</strong><br />
+Gläubiger-Identifikationsnummer: <strong>{{ creditor_id }}</strong><br />
+Datum der Mandatserteilung: <strong>{{ membership.mandate_signed_on|date:"d.m.Y" }}</strong></p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Bitte bewahre diese Angaben auf. Der Mitgliedsbeitrag von derzeit <strong>{{ fee }} €</strong> wird jeweils zum {{ collection_day }}. Bankarbeitstag eines Monats von deinem Konto eingezogen. Diese E-Mail gilt zugleich als Vorabankündigung (Pre-Notification) für alle wiederkehrenden Einzüge; die Ankündigungsfrist beträgt vereinbarungsgemäß {{ prenotification_days }} Kalendertage.</p>
+{% else %}
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Für den Mitgliedsbeitrag von derzeit <strong>{{ fee }} €</strong> pro Monat gilt die mit dem Finanzenreferat vereinbarte Zahlungsmethode.</p>
+{% endif %}
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Deine Mitgliedschaft endet automatisch mit dem Ende deines Mietverhältnisses mit dem Schollheim e.V.; einer gesonderten Austrittserklärung bedarf es nicht.</p>
+{% endblock %}

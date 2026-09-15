@@ -1,20 +1,29 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, LdapRoleAssignment, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, LdapRoleAssignment, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan, MembershipApplication, Membership, DirectDebitRun
 from django.utils import timezone
 from django.urls import reverse
 import base64
 
 class TenantSerializer(serializers.ModelSerializer):
+    # Beitrittsdatum of the tenant's HSV membership, or None. Only populated where the view
+    # annotates it (see all_tenant_data_view) - everywhere else this stays null and costs no
+    # extra query, which matters because this serializer is nested into many others.
+    membership_joined_on = serializers.SerializerMethodField()
+
     class Meta:
         model = Tenant
         fields = [
             'id', 'birthday', 'current_floor', 'current_points', 'current_room',
             'deposit', 'email', 'extension', 'external_id', 'gender', 'move_in',
             'move_out', 'name', 'nationality', 'note', 'probation_end', 'study_field',
-            'sublet', 'surname', 'tel_number', 'university', 'username', 'new_address'
+            'sublet', 'surname', 'tel_number', 'university', 'username', 'new_address',
+            'membership_joined_on'
         ]
         read_only_fields = ['id']  # ID is auto-generated
+
+    def get_membership_joined_on(self, obj):
+        return getattr(obj, 'membership_joined_on', None)
 
 class NewTenantSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
@@ -613,3 +622,173 @@ class MyCostsSerializer(serializers.Serializer):
     debt = serializers.DecimalField(max_digits=10, decimal_places=2)
     debt_pages = serializers.IntegerField()
     debt_jobs = serializers.IntegerField()
+
+
+# --- HSV membership ------------------------------------------------------------------
+
+class MembershipApplicationSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for the review screens.
+
+    Never exposes iban_ciphertext. The plaintext IBAN is only available through the
+    dedicated reveal endpoint, which logs who asked for it.
+    """
+    tenant = TenantSerializer(read_only=True)
+    iban_masked = serializers.CharField(read_only=True)
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    account_holder = serializers.SerializerMethodField()
+    has_pdf = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MembershipApplication
+        fields = [
+            'id', 'tenant', 'status', 'status_display',
+            'first_name', 'last_name', 'requested_join_date', 'is_of_age',
+            'amtsliste_consent', 'statutes_accepted',
+            'payment_method', 'payment_method_display', 'account_holder',
+            'iban_masked', 'mandate_confirmed',
+            'terms_version', 'submitted_at', 'submitted_by_username',
+            'decided_at', 'decided_by', 'decision_note', 'has_pdf',
+        ]
+        read_only_fields = fields
+
+    def get_account_holder(self, obj):
+        name = f"{obj.account_holder_first_name} {obj.account_holder_last_name}".strip()
+        return name or None
+
+    def get_has_pdf(self, obj):
+        return bool(obj.declaration_pdf)
+
+
+class MembershipApplicationCreateSerializer(serializers.Serializer):
+    """
+    Validates a submitted Beitrittserklärung.
+
+    Only shape and consistency are checked here; the rules that need the tenant record
+    (age from birthday, no duplicate open application) live in the view, which has it.
+    """
+    first_name = serializers.CharField(max_length=255)
+    last_name = serializers.CharField(max_length=255)
+    requested_join_date = serializers.DateField()
+    is_of_age = serializers.BooleanField()
+    amtsliste_consent = serializers.BooleanField(default=False)
+    statutes_accepted = serializers.BooleanField()
+
+    payment_method = serializers.ChoiceField(choices=MembershipApplication.PaymentMethod.choices)
+    account_holder_first_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    account_holder_last_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    iban = serializers.CharField(max_length=42, required=False, allow_blank=True)
+    mandate_confirmed = serializers.BooleanField(default=False)
+
+    def validate_statutes_accepted(self, value):
+        # The Beitritt is a contract - without this acknowledgement there is nothing to record.
+        if not value:
+            raise serializers.ValidationError(
+                "Die Satzung und die Vereinsordnungen müssen anerkannt werden."
+            )
+        return value
+
+    def validate_is_of_age(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Ein Beitritt vor Vollendung des 18. Lebensjahres ist online nicht möglich. "
+                "Bitte wende dich an das Finanzenreferat oder den Heimrat."
+            )
+        return value
+
+    def validate(self, attrs):
+        from .utils import crypto_utils
+
+        if attrs['payment_method'] != MembershipApplication.PaymentMethod.SEPA:
+            # "Andere Zahlungsmethode": drop any bank data that came along, so a half-filled
+            # SEPA section never ends up stored for someone who did not grant a mandate.
+            attrs['account_holder_first_name'] = ''
+            attrs['account_holder_last_name'] = ''
+            attrs['iban'] = ''
+            attrs['mandate_confirmed'] = False
+            return attrs
+
+        errors = {}
+        if not attrs.get('mandate_confirmed'):
+            errors['mandate_confirmed'] = (
+                "Ohne Erteilung des SEPA-Lastschriftmandats kann der Antrag nicht "
+                "abgeschickt werden. Wähle andernfalls die alternative Zahlungsmethode."
+            )
+        if not attrs.get('account_holder_first_name', '').strip():
+            errors['account_holder_first_name'] = "Vorname der kontoinhabenden Person fehlt."
+        if not attrs.get('account_holder_last_name', '').strip():
+            errors['account_holder_last_name'] = "Nachname der kontoinhabenden Person fehlt."
+
+        iban = crypto_utils.normalize_iban(attrs.get('iban', ''))
+        if not iban:
+            errors['iban'] = "IBAN fehlt."
+        elif not crypto_utils.validate_iban(iban):
+            errors['iban'] = "Die IBAN ist ungültig. Bitte prüfe deine Eingabe."
+        else:
+            attrs['iban'] = iban
+
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+
+class MembershipSerializer(serializers.ModelSerializer):
+    """Read serializer for the Mitgliederverwaltung grid. Masked IBAN only."""
+    tenant = TenantSerializer(read_only=True)
+    iban_masked = serializers.CharField(read_only=True)
+    mandate_status_display = serializers.CharField(source='get_mandate_status_display', read_only=True)
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+    sequence_type = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    is_collectable = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Membership
+        fields = [
+            'tenant', 'application', 'joined_on', 'ended_on',
+            'amtsliste_consent', 'amtsliste_consent_at',
+            'mandate_reference', 'mandate_signed_on', 'mandate_status', 'mandate_status_display',
+            'payment_method', 'payment_method_display', 'account_holder',
+            'iban_masked', 'last_collection_on', 'sequence_type',
+            'is_active', 'is_collectable', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class MembershipMandateUpdateSerializer(serializers.Serializer):
+    """Correcting bank details or revoking a mandate after the fact (Finanzenreferat)."""
+    account_holder = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    iban = serializers.CharField(max_length=42, required=False, allow_blank=True)
+    mandate_status = serializers.ChoiceField(
+        choices=Membership.MandateStatus.choices, required=False
+    )
+
+    def validate_iban(self, value):
+        from .utils import crypto_utils
+
+        if not value:
+            return ''
+        iban = crypto_utils.normalize_iban(value)
+        if not crypto_utils.validate_iban(iban):
+            raise serializers.ValidationError("Die IBAN ist ungültig.")
+        return iban
+
+
+class DirectDebitItemSerializer(serializers.Serializer):
+    tenant_id = serializers.IntegerField()
+    name = serializers.CharField()
+    mandate_reference = serializers.CharField()
+    sequence_type = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    iban_masked = serializers.CharField()
+
+
+class DirectDebitRunSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DirectDebitRun
+        fields = [
+            'id', 'message_id', 'collection_date', 'amount_per_member',
+            'member_count', 'total_amount', 'created_by', 'created_at',
+        ]
+        read_only_fields = fields

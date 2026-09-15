@@ -1,0 +1,12 @@
+{% extends "email/membership-base.html" %}
+{% block content %}
+<p style="font-family:Verdana, sans-serif;font-size:15px;font-weight:bold;line-height:18px;margin: 0 0 16px;color:#2d2d2d;padding-bottom:12px;">Hallo {{ tenant.name }},</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">dein Antrag auf Mitgliedschaft im HSV e.V. wurde leider abgelehnt.</p>
+
+{% if note %}
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Begründung: {{ note }}</p>
+{% endif %}
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Ein SEPA-Lastschriftmandat wurde nicht eingerichtet; es wird kein Mitgliedsbeitrag eingezogen. Bei Rückfragen wende dich gerne an den Heimrat.</p>
+{% endblock %}

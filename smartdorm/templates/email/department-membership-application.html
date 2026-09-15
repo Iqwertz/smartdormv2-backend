@@ -1,0 +1,13 @@
+{% extends "email/membership-base.html" %}
+{% block content %}
+<p style="font-family:Verdana, sans-serif;font-size:15px;font-weight:bold;line-height:18px;margin: 0 0 16px;color:#2d2d2d;padding-bottom:12px;">Neuer Mitgliedsantrag</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">{{ application.first_name }} {{ application.last_name }} (Zimmer {{ tenant.current_room|default:"-" }}) hat am {{ application.submitted_at|date:"d.m.Y" }} um {{ application.submitted_at|date:"H:i" }} Uhr eine Beitrittserklärung zum HSV e.V. abgegeben.</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Gewünschtes Beitrittsdatum: <strong>{{ application.requested_join_date|date:"d.m.Y" }}</strong><br />
+Zahlungsart: <strong>{{ application.get_payment_method_display }}</strong><br />
+Einwilligung Amtsliste: <strong>{% if application.amtsliste_consent %}ja{% else %}nein{% endif %}</strong></p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Der Antrag kann in SmartDorm unter "Mitgliedsanträge" geprüft und entschieden werden.</p>
+{% endblock %}
+{% block signature %}SmartDorm{% endblock %}

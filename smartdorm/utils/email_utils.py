@@ -25,7 +25,8 @@ def send_email_message(
     from_email=None,
     dynamic_pdf_template_path=None,
     dynamic_pdf_data=None,
-    dynamic_pdf_filename=None 
+    dynamic_pdf_filename=None,
+    extra_attachments=None
 ):
     """
     Sends an email using HTML and optionally plain text templates.
@@ -45,6 +46,10 @@ def send_email_message(
         dynamic_pdf_template_path (str, optional): Path to a PDF form template.
         dynamic_pdf_data (dict, optional): Data to fill the PDF form fields.
         dynamic_pdf_filename (str, optional): The filename for the generated PDF attachment.
+        extra_attachments (list, optional): Already-built attachments as
+                                            (filename, content_bytes, mimetype) tuples.
+                                            For documents rendered in memory that must not
+                                            be written to disk first.
     Returns:
         bool: True if the email was sent successfully, False otherwise.
     """
@@ -94,6 +99,12 @@ def send_email_message(
                 logger.info(f"Successfully attached dynamic PDF '{dynamic_pdf_filename}' to email.")
             else:
                 logger.warning(f"Could not generate or attach dynamic PDF for template: {dynamic_pdf_template_path}")
+
+        # Add in-memory attachments
+        if extra_attachments:
+            for filename, content, mimetype in extra_attachments:
+                email.attach(filename, content, mimetype)
+                logger.info(f"Successfully attached in-memory file: {filename}")
 
         # Add static attachments
         if attachment_paths:

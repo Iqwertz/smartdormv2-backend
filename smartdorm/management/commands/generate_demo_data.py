@@ -7,7 +7,9 @@ from django.db import transaction
 from smartdorm.models import (
     Tenant, Room, Rental, Department, Engagement, EngagementApplication,
     Departure, DepartmentSignature, Parcel, Subtenant, Claim, Termination,
-    DepartmentExtension, GlobalAppSettings, DepositBank
+    DepartmentExtension, GlobalAppSettings, DepositBank,
+    MembershipApplication, Membership, MembershipPrompt,
+    DirectDebitRun, DirectDebitItem
 )
 from faker import Faker
 
@@ -22,6 +24,11 @@ class Command(BaseCommand):
         self.stdout.write('Clearing old data...')
 
         with transaction.atomic():
+            DirectDebitItem.objects.all().delete()
+            DirectDebitRun.objects.all().delete()
+            Membership.objects.all().delete()
+            MembershipApplication.objects.all().delete()
+            MembershipPrompt.objects.all().delete()
             DepositBank.objects.all().delete()
             Termination.objects.all().delete()
             DepartmentExtension.objects.all().delete()
@@ -180,6 +187,77 @@ class Command(BaseCommand):
                         iban=fake.iban()[:255]
                     ))
             DepositBank.objects.bulk_create(deposit_banks)
+
+            # HSV memberships: a mix of approved members, open applications, and tenants
+            # who declined - so the review page and the join dialog both have something to show.
+            self.stdout.write('Generating HSV memberships...')
+            from smartdorm import membership_texts
+            from smartdorm.utils import sepa_utils
+
+            for t in tenants:
+                roll = random.random()
+                if roll < 0.55 or t.username == 'demo':
+                    joined = today - timedelta(days=random.randint(30, 900))
+                    uses_sepa = random.random() < 0.9
+                    application = MembershipApplication(
+                        tenant=t,
+                        status=MembershipApplication.Status.APPROVED,
+                        first_name=t.name, last_name=t.surname,
+                        requested_join_date=joined,
+                        is_of_age=True, amtsliste_consent=random.random() < 0.6,
+                        statutes_accepted=True,
+                        payment_method=(MembershipApplication.PaymentMethod.SEPA if uses_sepa
+                                        else MembershipApplication.PaymentMethod.OTHER),
+                        account_holder_first_name=t.name if uses_sepa else '',
+                        account_holder_last_name=t.surname if uses_sepa else '',
+                        mandate_confirmed=uses_sepa,
+                        terms_version=membership_texts.CURRENT_TERMS_VERSION,
+                        submitted_ip='127.0.0.1',
+                        submitted_by_username=t.username or 'demo',
+                        decided_by='demo-heimrat',
+                        decided_at=timezone.now(),
+                    )
+                    if uses_sepa:
+                        application.set_iban(fake.iban())
+                    application.save()
+
+                    last_collection = (today - timedelta(days=random.randint(1, 60))
+                                       if uses_sepa and random.random() < 0.7 else None)
+                    membership = Membership(
+                        tenant=t, application=application, joined_on=joined,
+                        amtsliste_consent=application.amtsliste_consent,
+                        amtsliste_consent_at=timezone.now() if application.amtsliste_consent else None,
+                        payment_method=application.payment_method,
+                        account_holder=f"{t.name} {t.surname}" if uses_sepa else '',
+                        mandate_status=(Membership.MandateStatus.ACTIVE if uses_sepa
+                                        else Membership.MandateStatus.NONE),
+                        mandate_signed_on=joined if uses_sepa else None,
+                        mandate_reference=(sepa_utils.build_mandate_reference(t.id, joined)
+                                           if uses_sepa else None),
+                        iban_ciphertext=application.iban_ciphertext,
+                        iban_last4=application.iban_last4,
+                        last_collection_on=last_collection,
+                    )
+                    membership.save()
+                elif roll < 0.75:
+                    application = MembershipApplication(
+                        tenant=t,
+                        status=MembershipApplication.Status.SUBMITTED,
+                        first_name=t.name, last_name=t.surname,
+                        requested_join_date=today + timedelta(days=random.randint(1, 60)),
+                        is_of_age=True, amtsliste_consent=random.random() < 0.5,
+                        statutes_accepted=True,
+                        payment_method=MembershipApplication.PaymentMethod.SEPA,
+                        account_holder_first_name=t.name, account_holder_last_name=t.surname,
+                        mandate_confirmed=True,
+                        terms_version=membership_texts.CURRENT_TERMS_VERSION,
+                        submitted_ip='127.0.0.1',
+                        submitted_by_username=t.username or 'demo',
+                    )
+                    application.set_iban(fake.iban())
+                    application.save()
+                elif roll < 0.85:
+                    MembershipPrompt.objects.create(tenant=t)
 
             # Engagements & Applications
             self.stdout.write('Generating Engagements...')

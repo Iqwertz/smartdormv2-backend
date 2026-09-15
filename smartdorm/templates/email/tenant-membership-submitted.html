@@ -1,0 +1,16 @@
+{% extends "email/membership-base.html" %}
+{% block content %}
+<p style="font-family:Verdana, sans-serif;font-size:15px;font-weight:bold;line-height:18px;margin: 0 0 16px;color:#2d2d2d;padding-bottom:12px;">Hallo {{ tenant.name }},</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">vielen Dank für deine Beitrittserklärung zum <strong>HSV e.V.</strong> Wir haben deinen Antrag vom {{ application.submitted_at|date:"d.m.Y" }} erhalten.</p>
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Ein zuständiges Referat (Zimmerreferat, Finanzenreferat oder Heimrat) prüft deinen Antrag. Sobald darüber entschieden wurde, bekommst du erneut eine E-Mail von uns.</p>
+
+{% if application.payment_method == "SEPA" %}
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Deine Mandatsreferenz für das SEPA-Lastschriftmandat teilen wir dir mit der Aufnahmebestätigung mit - also rechtzeitig vor dem ersten Einzug des Mitgliedsbeitrags von {{ fee }} €.</p>
+{% else %}
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Du hast angegeben, mit dem Finanzenreferat eine andere Zahlungsmethode vereinbart zu haben. Der Mitgliedsbeitrag beträgt derzeit {{ fee }} € pro Monat.</p>
+{% endif %}
+
+<p style="margin:0;font-family:Verdana, sans-serif;font-size:13px;line-height:18px;color:#797878;padding-bottom:12px;">Im Anhang findest du eine Kopie deiner Beitrittserklärung zur eigenen Aufbewahrung.</p>
+{% endblock %}

@@ -80,6 +80,13 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_ROOT = BASE_DIR / 'media'
 MEDIA_URL = '/media/'
 
+# --- Field-level encryption (HSV membership payment data) ---
+# Comma-separated list of urlsafe-base64 Fernet keys. The first one encrypts, all of them
+# decrypt, which is what makes key rotation possible. See smartdorm/utils/crypto_utils.py.
+FIELD_ENCRYPTION_KEYS = [
+    key.strip() for key in os.environ.get('FIELD_ENCRYPTION_KEYS', '').split(',') if key.strip()
+]
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # --- Session Configuration ---

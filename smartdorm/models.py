@@ -585,3 +585,309 @@ class Scan(models.Model):
 
     def __str__(self):
         return f"Scan {self.external_id[:8]} - {self.filename}"
+
+# --- HSV e.V. membership ------------------------------------------------------------------
+# The Verein is a separate legal entity from the Schollheim e.V. that owns t_tenant, so its
+# data lives in its own managed tables rather than as columns on the legacy tenant record.
+
+
+class EncryptedIbanMixin:
+    """
+    Shared accessors for the (iban_ciphertext, iban_last4) column pair.
+
+    The last four characters are kept in the clear so lists can show a masked IBAN without
+    decrypting a whole page of rows - decryption is reserved for the moments someone actually
+    needs the number, which are logged.
+    """
+
+    def set_iban(self, raw_iban):
+        from .utils import crypto_utils
+
+        if not raw_iban:
+            self.iban_ciphertext = ''
+            self.iban_last4 = ''
+            return
+
+        iban = crypto_utils.normalize_iban(raw_iban)
+        self.iban_ciphertext = crypto_utils.encrypt_str(iban)
+        self.iban_last4 = crypto_utils.iban_last4(iban)
+
+    def get_iban(self):
+        """Full IBAN in plaintext. Every caller must be behind a permission check."""
+        from .utils import crypto_utils
+
+        return crypto_utils.decrypt_str(self.iban_ciphertext)
+
+    @property
+    def iban_masked(self):
+        """Display form that needs no key: 'DE89 •••• •••• •••• •••• 00'."""
+        if not self.iban_last4:
+            return ''
+        return f"•••• {self.iban_last4}"
+
+
+class MembershipApplication(EncryptedIbanMixin, models.Model):
+    """
+    One submitted Beitrittserklärung, including the SEPA mandate given with it.
+
+    Treated as evidence and never edited after submission: if a member later disputes a
+    direct debit, the Verein has to be able to show what exactly was agreed to, when, by
+    whom and under which version of the text. Later changes to the bank details go to
+    Membership, not here.
+    """
+
+    class Status(models.TextChoices):
+        SUBMITTED = 'SUBMITTED', 'Eingereicht'
+        APPROVED = 'APPROVED', 'Genehmigt'
+        REJECTED = 'REJECTED', 'Abgelehnt'
+
+    class PaymentMethod(models.TextChoices):
+        SEPA = 'SEPA', 'SEPA-Lastschriftmandat'
+        OTHER = 'OTHER', 'Andere Zahlungsmethode (mit dem Finanzenreferat vereinbart)'
+
+    id = models.AutoField(primary_key=True)
+    tenant = models.ForeignKey('Tenant', on_delete=models.CASCADE, db_column='tenant_id',
+                               related_name='membership_applications')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SUBMITTED)
+
+    # Declared personal data. Deliberately a snapshot rather than a live read off Tenant:
+    # the declaration has to stay readable as it was signed, even after a name change.
+    first_name = models.CharField(max_length=255)
+    last_name = models.CharField(max_length=255)
+    requested_join_date = models.DateField(help_text="Gewünschtes Beitrittsdatum")
+    is_of_age = models.BooleanField(help_text="Selbstauskunft: mindestens 18 Jahre alt")
+
+    # Freiwillige Einwilligung in die Amtsliste. Default off, never required to submit,
+    # and revocable - so it is stored separately from the rest of the form.
+    amtsliste_consent = models.BooleanField(default=False)
+
+    # Acknowledgement of Satzung, Vereinsordnungen and the current Mitgliedsbeitrag.
+    statutes_accepted = models.BooleanField(default=False)
+
+    # SEPA mandate
+    payment_method = models.CharField(max_length=10, choices=PaymentMethod.choices,
+                                      default=PaymentMethod.SEPA)
+    account_holder_first_name = models.CharField(max_length=255, blank=True)
+    account_holder_last_name = models.CharField(max_length=255, blank=True)
+    iban_ciphertext = models.TextField(blank=True)
+    iban_last4 = models.CharField(max_length=4, blank=True)
+    mandate_confirmed = models.BooleanField(
+        default=False,
+        help_text="Mandat erteilt und Berechtigung zur Erteilung bestätigt"
+    )
+
+    # Evidence of the submission itself.
+    terms_version = models.CharField(
+        max_length=32,
+        help_text="Version des Erklärungstextes, der beim Absenden angezeigt wurde"
+    )
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    submitted_ip = models.GenericIPAddressField(null=True, blank=True)
+    submitted_by_username = models.CharField(max_length=255)
+    declaration_pdf = models.BinaryField(
+        null=True, blank=True,
+        help_text="Gerendertes PDF der Erklärung. In der DB statt im Dateisystem, weil es "
+                  "die IBAN enthält und MEDIA_ROOT vom Webserver ausgeliefert werden kann."
+    )
+
+    # Decision
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.CharField(max_length=255, blank=True)
+    decision_note = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 't_membership_application'
+        managed = True
+        ordering = ['-submitted_at']
+        constraints = [
+            # A tenant may re-apply after a rejection, but only ever have one open application.
+            models.UniqueConstraint(
+                fields=['tenant'],
+                condition=models.Q(status='SUBMITTED'),
+                name='uniq_open_membership_application',
+            )
+        ]
+
+    def __str__(self):
+        return f"Mitgliedsantrag {self.id} - {self.first_name} {self.last_name} ({self.status})"
+
+
+class Membership(EncryptedIbanMixin, models.Model):
+    """
+    The live membership and SEPA mandate register. One row per tenant, created on approval.
+
+    Unlike the application this is mutable: members change banks, revoke mandates, and the
+    membership ends when the Mietverhältnis does.
+    """
+
+    class MandateStatus(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Aktiv'
+        REVOKED = 'REVOKED', 'Widerrufen'
+        EXPIRED = 'EXPIRED', 'Abgelaufen'
+        NONE = 'NONE', 'Kein Mandat (andere Zahlungsmethode)'
+
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE,
+                                  db_column='tenant_id', related_name='membership')
+    application = models.ForeignKey('MembershipApplication', on_delete=models.SET_NULL,
+                                    null=True, blank=True, db_column='application_id',
+                                    related_name='membership')
+
+    joined_on = models.DateField(help_text="Beitrittsdatum")
+    ended_on = models.DateField(
+        null=True, blank=True,
+        help_text="Ende der Mitgliedschaft. Endet laut Beitrittserklärung automatisch mit "
+                  "dem Mietverhältnis."
+    )
+
+    amtsliste_consent = models.BooleanField(default=False)
+    amtsliste_consent_at = models.DateTimeField(null=True, blank=True)
+
+    # --- SEPA mandate ---
+    mandate_reference = models.CharField(
+        max_length=35, unique=True, null=True, blank=True,
+        help_text="Mandatsnummer. Eindeutig pro Gläubiger, max. 35 Zeichen."
+    )
+    mandate_signed_on = models.DateField(
+        null=True, blank=True,
+        help_text="Datum der Mandatserteilung - geht so in die pain.008 ein."
+    )
+    mandate_status = models.CharField(max_length=10, choices=MandateStatus.choices,
+                                      default=MandateStatus.NONE)
+    payment_method = models.CharField(max_length=10,
+                                      choices=MembershipApplication.PaymentMethod.choices,
+                                      default=MembershipApplication.PaymentMethod.SEPA)
+    account_holder = models.CharField(max_length=255, blank=True)
+    iban_ciphertext = models.TextField(blank=True)
+    iban_last4 = models.CharField(max_length=4, blank=True)
+    last_collection_on = models.DateField(
+        null=True, blank=True,
+        help_text="Letzter Einzug. Entscheidet über FRST/RCUR und über den Ablauf des "
+                  "Mandats nach 36 Monaten ohne Nutzung."
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 't_membership'
+        managed = True
+        ordering = ['-joined_on']
+
+    def __str__(self):
+        return f"Mitgliedschaft {self.tenant_id} seit {self.joined_on}"
+
+    @property
+    def is_active(self):
+        return self.ended_on is None or self.ended_on >= timezone.now().date()
+
+    @property
+    def sequence_type(self):
+        """FRST for the first collection under this mandate, RCUR for every one after."""
+        return 'RCUR' if self.last_collection_on else 'FRST'
+
+    def end_membership(self, end_date):
+        """
+        End the membership as of end_date.
+
+        The Beitrittserklärung says the membership ends automatically with the Mietverhältnis
+        and needs no separate Austrittserklärung, so this is called from the departure flow
+        rather than being something the member has to do.
+
+        The mandate is deliberately left ACTIVE until the end date: contributions are still
+        owed for the remaining months, and is_collectable stops including the member on its
+        own once the date has passed.
+        """
+        self.ended_on = end_date
+        self.save(update_fields=['ended_on', 'updated_at'])
+
+    def is_collectable_on(self, reference_date):
+        """
+        Whether a direct debit due on reference_date may be collected from this member.
+
+        The date matters: a membership that ends on 30.09. still owes the contributions due
+        before then, so it must stay collectable for those runs and drop out only for later
+        ones. Comparing against "today" instead would wrongly skip the final months.
+        """
+        if self.ended_on is not None and self.ended_on < reference_date:
+            return False
+        return (
+            self.payment_method == MembershipApplication.PaymentMethod.SEPA
+            and self.mandate_status == self.MandateStatus.ACTIVE
+            and bool(self.mandate_reference)
+            and bool(self.iban_ciphertext)
+        )
+
+    @property
+    def is_collectable(self):
+        """Collectable as of today. Display hint for the member register."""
+        return self.is_collectable_on(timezone.now().date())
+
+
+class MembershipPrompt(models.Model):
+    """
+    Records that a tenant asked not to be shown the join dialog again.
+
+    Joining is voluntary, so declining has to be a real, respected answer rather than a
+    dialog that keeps reappearing.
+    """
+
+    tenant = models.OneToOneField('Tenant', primary_key=True, on_delete=models.CASCADE,
+                                  db_column='tenant_id', related_name='membership_prompt')
+    opted_out_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_membership_prompt'
+        managed = True
+
+    def __str__(self):
+        return f"Kein Beitrittshinweis für Bewohner {self.tenant_id}"
+
+
+class DirectDebitRun(models.Model):
+    """
+    One generated SEPA collection file (pain.008).
+
+    Persisted rather than generated on the fly so that the FRST/RCUR sequence stays correct
+    and a file can be re-downloaded without producing a second, different collection.
+    """
+
+    id = models.AutoField(primary_key=True)
+    message_id = models.CharField(max_length=35, unique=True,
+                                  help_text="MsgId der pain.008, eindeutig gegenüber der Bank")
+    collection_date = models.DateField(help_text="Fälligkeitsdatum des Einzugs")
+    amount_per_member = models.DecimalField(max_digits=10, decimal_places=2)
+    member_count = models.IntegerField(default=0)
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    xml = models.TextField(blank=True)
+    created_by = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 't_direct_debit_run'
+        managed = True
+        ordering = ['-collection_date', '-created_at']
+
+    def __str__(self):
+        return f"Einzug {self.collection_date} ({self.member_count} Mitglieder)"
+
+
+class DirectDebitItem(models.Model):
+    """A single member's position in a collection run, as it was submitted to the bank."""
+
+    id = models.AutoField(primary_key=True)
+    run = models.ForeignKey('DirectDebitRun', on_delete=models.CASCADE, db_column='run_id',
+                            related_name='items')
+    membership = models.ForeignKey('Membership', on_delete=models.CASCADE,
+                                   db_column='membership_tenant_id', related_name='debit_items')
+    mandate_reference = models.CharField(max_length=35)
+    sequence_type = models.CharField(max_length=4, help_text="FRST oder RCUR")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    end_to_end_id = models.CharField(max_length=35)
+
+    class Meta:
+        db_table = 't_direct_debit_item'
+        managed = True
+        unique_together = (('run', 'membership'),)
+
+    def __str__(self):
+        return f"{self.mandate_reference} - {self.amount} EUR ({self.sequence_type})"
