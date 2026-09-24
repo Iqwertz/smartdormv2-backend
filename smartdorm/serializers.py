@@ -1,20 +1,33 @@
 # smartdorm/serializers.py
 from rest_framework import serializers
-from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, LdapRoleAssignment, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan
+from smartdorm.models import Tenant, Engagement, Department, GlobalAppSettings, Parcel, Subtenant,  Rental, Room, Departure, DepartmentSignature, Claim, EngagementApplication, Termination, DepartmentExtension, LdapRoleAssignment, Event, AttendanceRecord, AttendanceSession, BaseAttendanceRecord, Device, PrintSession, PrintJob, Scan, TenantOnboarding
 from django.utils import timezone
 from django.urls import reverse
 import base64
 
 class TenantSerializer(serializers.ModelSerializer):
+    # Lives in t_tenant_onboarding rather than on the legacy t_tenant table, but is read
+    # here as a plain tenant property so the frontend does not need a second request.
+    tutorial_completed = serializers.SerializerMethodField()
+
     class Meta:
         model = Tenant
         fields = [
             'id', 'birthday', 'current_floor', 'current_points', 'current_room',
             'deposit', 'email', 'extension', 'external_id', 'gender', 'move_in',
             'move_out', 'name', 'nationality', 'note', 'probation_end', 'study_field',
-            'sublet', 'surname', 'tel_number', 'university', 'username', 'new_address'
+            'sublet', 'surname', 'tel_number', 'university', 'username', 'new_address',
+            'tutorial_completed'
         ]
         read_only_fields = ['id']  # ID is auto-generated
+
+    def get_tutorial_completed(self, obj):
+        # A missing onboarding row means the tour has not been seen yet. List views that
+        # use this serializer should select_related('onboarding') to avoid one query per row.
+        try:
+            return bool(obj.onboarding.tutorial_completed)
+        except TenantOnboarding.DoesNotExist:
+            return False
 
 class NewTenantSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)

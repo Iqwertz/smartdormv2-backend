@@ -68,6 +68,15 @@ This is a **Django-managed** (`managed = True`) singleton model. It holds global
     *   `applications_open`: A boolean flag to enable or disable new engagement applications.
     *   `show_applications`: A boolean flag to control the visibility of submitted applications to all tenants.
 
+### `TenantOnboarding` (`t_tenant_onboarding`)
+A **Django-managed** (`managed = True`) side-table with a one-to-one link to `Tenant`. It records whether a tenant has already been through the introduction tour. The state lives here rather than as a column on `t_tenant`, because that legacy table is `managed = False` and Django emits no DDL for it.
+*   **Key Fields**:
+    *   `tenant`: Primary key, `OneToOneField` to `Tenant` (`tenant_id`).
+    *   `tutorial_completed`: Whether the tour was finished or skipped. A missing row means "not seen yet", so no backfill is needed for existing tenants.
+    *   `completed_at`: When it was completed, `NULL` while open.
+    *   `last_step`: The step the tenant was on when the tour ended.
+*   Read back through `TenantSerializer.tutorial_completed`, so list views that serialize many tenants should use `.select_related('onboarding')`.
+
 ## Supporting Models
 
 *   **`Subtenant` (`t_subtenant`)**: A temporary resident staying in a tenant's room. They have limited access and a separate LDAP account creation flow.

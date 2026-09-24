@@ -585,3 +585,28 @@ class Scan(models.Model):
 
     def __str__(self):
         return f"Scan {self.external_id[:8]} - {self.filename}"
+
+
+class TenantOnboarding(models.Model):
+    """
+    Tracks whether a tenant has already been through the introduction tour.
+
+    t_tenant is the legacy, unmanaged table owned by the old system, so per-user app
+    state lives in its own managed table rather than as a column there. A missing row
+    means "tour not seen yet", which is why no backfill is needed for existing tenants.
+    """
+    tenant = models.OneToOneField(Tenant, primary_key=True, on_delete=models.CASCADE,
+                                  db_column='tenant_id', related_name='onboarding')
+    tutorial_completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_step = models.IntegerField(default=0, help_text="Zuletzt gesehener Schritt der Tour")
+
+    class Meta:
+        db_table = 't_tenant_onboarding'
+        managed = True
+        verbose_name = "Onboarding"
+        verbose_name_plural = "Onboardings"
+
+    def __str__(self):
+        state = 'abgeschlossen' if self.tutorial_completed else 'offen'
+        return f"Onboarding Bewohner {self.tenant_id}: {state}"

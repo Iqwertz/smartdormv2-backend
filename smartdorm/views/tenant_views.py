@@ -31,7 +31,7 @@ from dateutil.relativedelta import relativedelta
 
 
 from ..permissions import GroupAndEmployeeTypePermission
-from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
+from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication, TenantOnboarding
 from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer, MyEngagementApplicationSerializer
 from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
 from .engagement_views import trigger_pdf_regeneration
@@ -565,3 +565,63 @@ def my_contract_calculation_view(request):
     except Exception as e:
         logger.error(f"Error calculating contract details for {request.user.username}: {e}", exc_info=True)
         return Response({"error": "An internal error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# --- Onboarding / Einführungstour ------------------------------------------------
+# Note: permissions are declared as real permission classes here. Setting
+# `view.required_groups` / `required_employee_types` inside an @api_view function has no
+# effect (see permissions.py), so IsAuthenticated plus the tenant lookup below is what
+# actually guards these. Subtenants never reach /api/tenants/ thanks to
+# SubtenantApiGuardMiddleware.
+
+def _get_tenant_or_none(request):
+    """The Tenant record behind the logged-in account, or None for non-tenant accounts."""
+    return Tenant.objects.filter(username=request.user.username).first()
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def complete_tutorial_view(request):
+    """
+    Marks the introduction tour as done for the logged-in tenant.
+
+    Called both when the tour is finished and when it is skipped - either way the tenant
+    has answered the question of whether they want to see it, so it must not come back.
+    """
+    tenant = _get_tenant_or_none(request)
+    if not tenant:
+        return Response({"error": "Kein Bewohnerdatensatz für diesen Account gefunden."},
+                        status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        last_step = int(request.data.get('last_step', 0))
+    except (TypeError, ValueError):
+        last_step = 0
+
+    onboarding, _ = TenantOnboarding.objects.update_or_create(
+        tenant=tenant,
+        defaults={
+            'tutorial_completed': True,
+            'completed_at': timezone.now(),
+            'last_step': last_step,
+        }
+    )
+    return Response({"tutorial_completed": onboarding.tutorial_completed}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@authentication_classes([SessionAuthentication])
+def reset_tutorial_view(request):
+    """Lets a tenant replay the introduction tour from the settings card."""
+    tenant = _get_tenant_or_none(request)
+    if not tenant:
+        return Response({"error": "Kein Bewohnerdatensatz für diesen Account gefunden."},
+                        status=status.HTTP_403_FORBIDDEN)
+
+    TenantOnboarding.objects.update_or_create(
+        tenant=tenant,
+        defaults={'tutorial_completed': False, 'completed_at': None, 'last_step': 0}
+    )
+    return Response({"tutorial_completed": False}, status=status.HTTP_200_OK)

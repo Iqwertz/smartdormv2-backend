@@ -14,6 +14,8 @@ This document provides a high-level overview of the API structure. All endpoints
 *   `GET /my-engagements/`: Lists all past and present engagements for the tenant.
 *   `GET /my-departure/`: Fetches the tenant's open departure request, if one exists.
 *   `POST /my-departure/decide/`: Allows the tenant to confirm their departure or request an extension.
+*   `POST /onboarding/complete/`: Marks the introduction tour as completed for the logged-in tenant. Sent both on finish and on skip. Optional body: `{"last_step": <int>}`.
+*   `POST /onboarding/reset/`: Clears the flag so the tenant can replay the tour from the settings card.
 *   `GET/POST/DELETE /engagement-application/...`: Endpoints for creating, viewing, and deleting engagement applications.
 *   `GET /global-settings/`: Retrieves the current global application settings (e.g., current semester).
 

@@ -67,7 +67,9 @@ def all_tenant_data_view(request):
         )
 
     try:
-        ordered_tenants = tenants.order_by('surname', 'name')
+        # select_related: TenantSerializer reads the onboarding flag, which would
+        # otherwise cost one extra query per tenant in this list.
+        ordered_tenants = tenants.select_related('onboarding').order_by('surname', 'name')
         serializer = TenantSerializer(ordered_tenants, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
@@ -861,7 +863,7 @@ def list_departure_candidates_view(request):
         move_out__lte=eight_months_from_now,
         move_out__gte=today,
         departure__isnull=True  # Exclude tenants with existing departure records
-    ).order_by('move_out')
+    ).select_related('onboarding').order_by('move_out')
 
     serializer = TenantSerializer(candidates, many=True)
     return Response(serializer.data)
