@@ -1,4 +1,5 @@
 import ldap
+from ldap.filter import escape_filter_chars
 from django.conf import settings
 import logging
 import uuid
@@ -299,9 +300,9 @@ def find_ldap_user_by_email(email, employee_type=None):
 
         # Search for user by email
         if employee_type:
-            search_filter = f"(&(mail={email})(employeeType={employee_type}))"
+            search_filter = f"(&(mail={escape_filter_chars(email)})(employeeType={escape_filter_chars(employee_type)}))"
         else:
-            search_filter = f"(mail={email})"
+            search_filter = f"(mail={escape_filter_chars(email)})"
         result = con.search_s(user_base_dn, ldap.SCOPE_SUBTREE, search_filter, ['cn', 'givenName', 'sn'])
         
         if result:
@@ -325,9 +326,9 @@ def find_ldap_user_by_email(email, employee_type=None):
         if 'con' in locals() and con:
             con.unbind_s()
             
-def update_ldap_user_attributes(username, email=None, first_name=None, last_name=None):
+def update_ldap_user_attributes(username, email=None, first_name=None, last_name=None, employee_type=None):
     """
-    Updates LDAP user attributes (email, first name, last name).
+    Updates LDAP user attributes (email, first name, last name, employeeType).
     Only updates attributes that are provided (not None).
     """
     ldap_uri = settings.AUTH_LDAP_SERVER_URI
@@ -351,6 +352,9 @@ def update_ldap_user_attributes(username, email=None, first_name=None, last_name
 
         if last_name is not None:
             mod_list.append((ldap.MOD_REPLACE, 'sn', [last_name.encode('utf-8')]))
+
+        if employee_type is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'employeeType', [employee_type.encode('utf-8')]))
 
         # Update displayName if either first_name or last_name is provided
         if first_name is not None or last_name is not None:
@@ -380,6 +384,36 @@ def update_ldap_user_attributes(username, email=None, first_name=None, last_name
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during attribute update for '{username}': {e}")
         raise ConnectionError(f"Could not update LDAP attributes: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def get_ldap_user_emails(username):
+    """
+    Returns the mail addresses of an LDAP user as a list, or None if the user does not exist.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        try:
+            result = con.search_s(user_dn, ldap.SCOPE_BASE, attrlist=['mail'])
+        except ldap.NO_SUCH_OBJECT:
+            return None
+
+        _, attrs = result[0]
+        return [m.decode('utf-8') for m in attrs.get('mail', [])]
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while reading mail of '{username}': {e}")
+        raise ConnectionError(f"Could not read user from the authentication server: {e}")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()

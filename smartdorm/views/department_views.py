@@ -19,7 +19,7 @@ from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils
-from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, SUBTENANT_EMPLOYEE_TYPE
+from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, find_subtenant_account, subtenant_base_username, SUBTENANT_EMPLOYEE_TYPE
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
 
@@ -467,12 +467,14 @@ def create_new_tenant_view(request):
     if not email_sent:
         logger.warning(f"Tenant '{username}' created, but the welcome email to {data['email']} failed to send.")
         return Response(
-            {"message": "Tenant created successfully, but the notification email could not be sent."},
+            {"message": "Tenant created successfully, but the notification email could not be sent.",
+             "username": username, "email_sent": False},
             status=status.HTTP_201_CREATED
         )
 
     return Response(
-        {"message": f"Tenant '{username}' created successfully and notification sent.", "username": username},
+        {"message": f"Tenant '{username}' created successfully and notification sent.",
+         "username": username, "email_sent": True},
         status=status.HTTP_201_CREATED
     )
     
@@ -497,74 +499,19 @@ def create_subtenant_view(request):
     main_tenant = get_object_or_404(Tenant, id=data['tenant_id'])
     subtenant_floor_group_dn = floor_group_dn(main_tenant.current_floor)
 
-    base_username = (data['name'] + " " + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss') # subtenant username format is diffrent from tenant to avoid conflicts
-    username = base_username
-    counter = 1
-    #Log all Tenants with the same username, so we can increment it if needed
-    logger.info(f"Creating subtenant with base username: {base_username}")
-    
-    while Tenant.objects.filter(username=username).exists():
-        logger.info(f"Username {username} already exists, trying next increment.")
-        username = f"{base_username}{counter}"
-        counter += 1
-        
-    
-    password = generate_secure_password()
-    
-    #Determin if there was already a subtenant with the same username and skip ldap user creation if so
-    is_new_subtenant = not Subtenant.objects.filter(name=data['name'], surname=data['surname']).exists()
-         
-    if is_new_subtenant:
-        try:
-            # Copy, never mutate the config constant
-            ldap_groups = list(app_config.DEFAULT_SUBTENANT_LDAP_GROUPS)
-            if subtenant_floor_group_dn:
-                ldap_groups.append(subtenant_floor_group_dn)
+    ldap_groups = list(app_config.DEFAULT_SUBTENANT_LDAP_GROUPS)  # copy, never mutate the config constant
+    if subtenant_floor_group_dn:
+        ldap_groups.append(subtenant_floor_group_dn)
 
-            ldap_utils.create_ldap_user(
-                username=username, password=password, first_name=data['name'],
-                last_name=data['surname'], email=data['email'],
-                group_dns=ldap_groups,
-                userType="SUBTENANT"
-            )
-        except (ValueError, ConnectionError) as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    else:
-        # Returning subtenant: the LDAP account already exists, but it may sit on the
-        # wrong floor (or none at all) from a previous sublet. Look the account up by
-        # email, since the username generated above ignores any numeric suffix that was
-        # appended when it was originally created. Restricted to SUBTENANT accounts -
-        # a returning subtenant's email often also belongs to a tenant account.
-        try:
-            existing_username, _ = ldap_utils.find_ldap_user_by_email(
-                data['email'], employee_type=SUBTENANT_EMPLOYEE_TYPE
-            )
-            if not existing_username:
-                logger.warning(
-                    f"No subtenant LDAP account found for returning subtenant '{data['email']}'. "
-                    f"Floor group could not be assigned."
-                )
-            elif Tenant.objects.filter(username=existing_username).exists():
-                logger.warning(
-                    f"LDAP account '{existing_username}' for subtenant '{data['email']}' belongs "
-                    f"to a main tenant. Skipping group assignment."
-                )
-            else:
-                for group_dn in app_config.DEFAULT_SUBTENANT_LDAP_GROUPS:
-                    ldap_utils.add_user_to_group(existing_username, group_dn)
-                if subtenant_floor_group_dn:
-                    ldap_utils.add_user_to_group(existing_username, subtenant_floor_group_dn)
-                    logger.info(
-                        f"Added returning subtenant '{existing_username}' to LDAP group for "
-                        f"floor '{main_tenant.current_floor}'."
-                    )
-        except Exception as e:
-            # Never fail the request over a group assignment - the nightly sync heals it.
-            logger.error(
-                f"Error assigning LDAP groups to returning subtenant '{data['email']}': {e}",
-                exc_info=True
-            )
+    # 1. New or returning subtenant? Decided by the LDAP account, not by earlier Subtenant
+    # rows: a row can outlive its account (deleted, never created) and the other way round.
+    try:
+        existing_username = find_subtenant_account(data['email'], data['name'], data['surname'])
+    except ConnectionError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    # 2. Save the subtenant first. The LDAP writes below cannot be rolled back, so they
+    # run last and roll this row back if they fail.
     try:
         max_id_result = Subtenant.objects.aggregate(max_id=Max('id'))
         new_id = (max_id_result['max_id'] or 0) + 1
@@ -576,28 +523,66 @@ def create_subtenant_view(request):
             tenant_id=data['tenant_id'], room_id=data['room_id'],
             university_confirmation=data['university_confirmation']
         )
-        
+
         # Update the main tenant's sublet count and adjust dates
         recalculate_tenant_contract_dates(subtenant.tenant)
-            
+
     except Exception as e:
-        logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
-        return Response({"error": "Failed to save subtenant to database after creating auth entry."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        transaction.set_rollback(True)
+        logger.error(f"DB Error for new subtenant '{data['email']}': {e}", exc_info=True)
+        return Response({"error": "Failed to save subtenant to database."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    if is_new_subtenant:
-        email_context = {
-            'greeting': f"Hallo {data['name']}",
-            'username': username, 'password': password,
-        }
-        email_sent = email_utils.send_email_message(
-            recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
-            html_template_name='email/user-account-creation-subtenant.html',
-            context=email_context
-        )
-        if not email_sent:
-            logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+    # 3. Create the account, or give the existing one a fresh password. Either way the
+    # subtenant gets their credentials mailed, so re-adding a subtenant resends them.
+    password = generate_secure_password()
+    try:
+        if existing_username:
+            username = existing_username
+            logger.info(f"Returning subtenant '{data['email']}': resetting password of LDAP account '{username}'.")
+            ldap_utils.update_ldap_password(username, password)
+            # Accounts from before employeeType was stamped carry TENANT - mark them, so
+            # the nightly sync and the subtenant access guard recognise them from now on.
+            ldap_utils.update_ldap_user_attributes(username, employee_type=SUBTENANT_EMPLOYEE_TYPE)
+            for group_dn in ldap_groups:
+                ldap_utils.add_user_to_group(username, group_dn)
+        else:
+            base_username = subtenant_base_username(data['name'], data['surname'])
+            username = base_username
+            counter = 1
+            while ldap_utils.ldap_username_exists(username) or Tenant.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+            logger.info(f"Creating LDAP account '{username}' for new subtenant '{data['email']}'.")
 
-    return Response(SubtenantSerializer(subtenant).data, status=status.HTTP_201_CREATED)
+            ldap_utils.create_ldap_user(
+                username=username, password=password, first_name=data['name'],
+                last_name=data['surname'], email=data['email'],
+                group_dns=ldap_groups,
+                userType=SUBTENANT_EMPLOYEE_TYPE
+            )
+    except (ValueError, ConnectionError) as e:
+        transaction.set_rollback(True)
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 4. Mail the credentials
+    email_context = {
+        'greeting': data['name'],
+        'username': username, 'password': password,
+        'account_reused': bool(existing_username),
+    }
+    email_sent = email_utils.send_email_message(
+        recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
+        html_template_name='email/user-account-creation-subtenant.html',
+        context=email_context
+    )
+    if not email_sent:
+        logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+
+    response_data = SubtenantSerializer(subtenant).data
+    response_data['username'] = username
+    response_data['account_reused'] = bool(existing_username)
+    response_data['email_sent'] = email_sent
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -691,24 +676,35 @@ def delete_subtenant_view(request, subtenant_id):
     # Hold on to the main tenant: their sublet total has to be recalculated after the
     # subtenant row is gone, and subtenant.tenant is no longer reachable by then.
     main_tenant = subtenant.tenant
-    #Reconstruct the username to delete, not the cleanest way since it assumes that the username isnt incremented when creating subtenants, however with the low amount of subtenants it is very unlikely to happen.
-    username_to_delete = (subtenant.name + " " + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
-                                                                                                                                                        )
-    if not username_to_delete:
-        subtenant.delete()
-        recalculate_tenant_contract_dates(main_tenant)
+    email, name, surname = subtenant.email, subtenant.name, subtenant.surname
+
+    # The LDAP account belongs to the person, not to one sublet: repeat sublets share it,
+    # so it is only deleted together with the last row for this email.
+    other_rows_exist = bool(email) and Subtenant.objects.filter(
+        email__iexact=email.strip()
+    ).exclude(id=subtenant.id).exists()
+
+    subtenant.delete()
+    recalculate_tenant_contract_dates(main_tenant)
+
+    if other_rows_exist:
+        logger.info(f"Deleted subtenant row {subtenant_id}; kept the LDAP account of '{email}', other sublets still use it.")
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    # LDAP last: it cannot be rolled back, the row deletion above can
     try:
-        ldap_utils.delete_ldap_user(username_to_delete)
-        subtenant.delete()
-        recalculate_tenant_contract_dates(main_tenant)
-        logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
+        username_to_delete = find_subtenant_account(email, name, surname)
+        if username_to_delete:
+            ldap_utils.delete_ldap_user(username_to_delete)
+            logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
+        else:
+            logger.warning(f"Deleted subtenant row {subtenant_id}, but no subtenant LDAP account was found for '{email}'.")
         return Response(status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
-        logger.error(f"Failed to delete subtenant '{username_to_delete}': {e}", exc_info=True)
+        transaction.set_rollback(True)
+        logger.error(f"Failed to delete subtenant '{email}': {e}", exc_info=True)
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
 # --- Department Signature Views ---
 DEPARTMENT_CONFIG = {
     "tutoren": {"name": "TUTOREN", "group": "Tutoren"},

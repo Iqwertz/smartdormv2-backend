@@ -97,42 +97,69 @@ def custom_role_dns_by_username():
     return dns_by_username
 
 
-def resolve_subtenant_username(subtenant):
+def subtenant_base_username(name, surname):
     """
-    Resolves a subtenant's LDAP cn.
+    The cn a subtenant account is created under, before any numeric suffix is appended.
+    Deliberately a different format than tenant usernames ('j.doe') to avoid conflicts.
+    """
+    return (
+        (name + " " + surname).lower().replace(' ', '')
+        .replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+    )
 
-    Subtenant has no username column, and rebuilding it from name + surname breaks as
-    soon as the creation loop appended a numeric suffix, so we look the account up by
-    its email address instead.
 
-    The lookup is restricted to SUBTENANT_EMPLOYEE_TYPE accounts: subletting first and
-    moving in later is common, so a subtenant's email very often also belongs to a
-    tenant account that this sync must never touch. Returns None when no subtenant
-    account exists.
+def find_subtenant_account(email, name, surname):
+    """
+    Resolves the LDAP cn of a person's existing subtenant account, or None.
+
+    Subtenant has no username column, so the account is looked up:
+    1. by email among SUBTENANT_EMPLOYEE_TYPE accounts - the normal case, and the only
+       one that still works when the creation loop appended a numeric suffix.
+    2. by the rebuilt name + surname cn, for accounts created before employeeType was
+       stamped (those carry TENANT). Only accepted when the account's mail matches, so a
+       namesake's account is never picked up.
+
+    Subletting first and moving in later is common, so a subtenant's email very often
+    also belongs to a tenant account - a main tenant's account is never returned.
+
+    Raises ConnectionError when LDAP is unreachable, so an outage is never mistaken for
+    a missing account.
     """
     from smartdorm.models import Tenant
 
-    if not subtenant.email:
+    username = None
+    if email:
+        username, _ = ldap_utils.find_ldap_user_by_email(email, employee_type=SUBTENANT_EMPLOYEE_TYPE)
+
+    if not username and email:
+        candidate = subtenant_base_username(name or '', surname or '')
+        mails = ldap_utils.get_ldap_user_emails(candidate) if candidate else None
+        if mails and email.strip().lower() in {m.strip().lower() for m in mails}:
+            username = candidate
+
+    if username and Tenant.objects.filter(username__iexact=username).exists():
+        logger.warning(
+            f"LDAP account '{username}' found for subtenant '{email}' belongs to a "
+            f"main tenant. Skipping to avoid modifying tenant groups."
+        )
         return None
 
+    return username
+
+
+def resolve_subtenant_username(subtenant):
+    """
+    find_subtenant_account() for a Subtenant row, for callers that must not fail on an
+    LDAP outage (floor-group follow-ups). Returns None when no account can be resolved.
+    """
     try:
-        username, _ = ldap_utils.find_ldap_user_by_email(
-            subtenant.email, employee_type=SUBTENANT_EMPLOYEE_TYPE
-        )
+        username = find_subtenant_account(subtenant.email, subtenant.name, subtenant.surname)
     except ConnectionError as e:
         logger.error(f"Could not resolve LDAP user for subtenant '{subtenant.email}': {e}")
         return None
 
     if not username:
         logger.warning(f"No subtenant LDAP account found for '{subtenant.email}'.")
-        return None
-
-    if Tenant.objects.filter(username=username).exists():
-        logger.warning(
-            f"LDAP account '{username}' found for subtenant '{subtenant.email}' belongs to a "
-            f"main tenant. Skipping to avoid modifying tenant groups."
-        )
-        return None
 
     return username
 

@@ -282,10 +282,17 @@ class Command(BaseCommand):
                 continue
             rows_by_email.setdefault(sub.email.strip().lower(), []).append(sub)
 
+        former_without_account = 0
         for email, rows in rows_by_email.items():
             username = username_by_email.get(email)
             if not username:
-                logger.warning(f"No LDAP account found for subtenant '{email}'. Skipping.")
+                # Only worth a warning while the sublet is running or ahead: an ended sublet
+                # without an account has nothing left to revoke. Most of those predate
+                # employeeType stamping or had their account deleted on purpose.
+                if any(r.move_out >= today for r in rows):
+                    logger.warning(f"No LDAP account found for current/upcoming subtenant '{email}'. Skipping.")
+                else:
+                    former_without_account += 1
                 continue
 
             # Never touch a main tenant's account, even on an email collision
@@ -320,6 +327,9 @@ class Command(BaseCommand):
 
             for g_dn in groups_to_remove:
                 self._remove_from_group(con, user_dn, g_dn, username)
+
+        if former_without_account:
+            logger.info(f"Skipped {former_without_account} former subtenants without a SUBTENANT LDAP account.")
 
     def _build_ldap_email_map(self, con):
         """
