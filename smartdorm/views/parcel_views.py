@@ -128,7 +128,7 @@ def create_parcel_view(request):
 
         # Send email notification
         if recipient_email:
-            email_subject = "Benachrichtigung: Post für Dich"
+            email_subject = "Benachrichtigung: Post für dich"
             if registered:
                 count_message = "ist ein Einschreiben"
                 actual_quantity_for_email = 1

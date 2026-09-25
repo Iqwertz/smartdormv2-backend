@@ -45,7 +45,8 @@ The **Zimmerreferat and the Verwaltung decide** on those benefits by hand. Smart
 keeps the tally, and must not automate the decisions. For orientation, the resident dashboard
 shows the dorm's thresholds for extensions: 75, 150, 250, 300 and 350 points, then +50 per
 further extension, each due by move-in + sublet months + (n+1) years + 9 months
-(`smartdormv2-frontend/src/utils/extensionLogic.ts`).
+(`smartdormv2-frontend/src/utils/extensionLogic.ts`). The rule itself is in the association's
+statutes (Vereinsstatuten), which are private. Don't copy them into the repo.
 
 ## Who uses which part of SmartDorm
 

@@ -71,7 +71,8 @@ docs/                        knowledge base; docs/todo.md = open bugs and projec
   Verwaltung extension or a termination and let `recalculate_tenant_contract_dates()` do the
   rest. See [`docs/domain/contract-dates.md`](docs/domain/contract-dates.md).
 - **Domain constants go in `config.py`**, not inline in views.
-- **User-facing text is German and uses "du"**: emails, and API messages the frontend shows.
+- **User-facing text is German and uses "du"** (lowercase mid-sentence, as grammar has it;
+  short forms like "Bewohner", no ":innen"): emails, and API messages the frontend shows.
   Keep it short and friendly, the way a fellow resident would write it. The email templates
   are the reference. The full guide is `../smartdormv2-frontend/docs/voice-and-tone.md`.
   Logs and code comments stay in English.
