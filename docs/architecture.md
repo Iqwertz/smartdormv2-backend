@@ -39,6 +39,7 @@ rule is `CheckedInView`. See [permissions.md](permissions.md).
 | `smartdorm/utils/ldap_sync.py` | rules for which groups an account should have (shared by views and the nightly job) |
 | `smartdorm/utils/email_utils.py`, `pdf_utils.py`, `credential_utils.py`, `subtenant_utils.py`, `log_utils.py`, `cups_utils.py` | mail, PDF forms, password resend, subtenant lookup, log file, legacy CUPS |
 | `smartdorm/permissions.py`, `checks.py`, `access_inventory.py`, `middleware.py` | access control |
+| `smartdorm/exceptions.py` | German texts for DRF's own error responses |
 | `smartdorm/templates/email/` | mail templates, all based on `template.html` |
 | `smartdorm/templates/pdf/` | PDF forms filled with pypdf (Wohnzeitende-Mitteilung, extension application, departure) |
 
@@ -53,7 +54,11 @@ and who may call them is `manage.py list_api_access` (also committed as
 - Views are functions: `@api_view`, `@authentication_classes([SessionAuthentication])`,
   `@permission_classes([<one rule>])`, and `@transaction.atomic` when they write.
 - Errors come back as `{"error": "..."}` with a fitting status. Success bodies are serializer
-  data or `{"message": ...}`.
+  data or `{"message": ...}`. **These texts are German with "du"**, because the frontend shows
+  them to users as they are. `smartdorm/exceptions.py` (the DRF `EXCEPTION_HANDLER`) replaces
+  DRF's own English 403/404/login/CSRF texts. Serializer field errors ("This field is
+  required.") are still DRF's English, so the frontend shows its own text for those. The Pi agent
+  endpoints answer in English, because a machine reads them.
 - "Current" tenants are `move_in <= today <= move_out`. The same filter appears in many views.
 - The logged-in resident's record is `Tenant.objects.get(username=request.user.username)`.
 - Mails: `email_utils.send_email_message(recipient_list, subject, html_template_name, context,

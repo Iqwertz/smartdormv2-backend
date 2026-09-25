@@ -70,7 +70,7 @@ def all_tenant_data_view(request):
     except Exception as e:
         print(f"Error retrieving tenant data: {e}")
         return Response(
-            {"error": "An error occurred while retrieving tenant data."},
+            {"error": "Die Mieterdaten konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -120,7 +120,7 @@ def update_tenant_view(request, tenant_id):
                 # DB was saved - report the LDAP problem instead of failing the whole update
                 return Response(
                     {
-                        "message": "Tenant updated successfully, but LDAP sync failed. Manual synchronization may be needed.",
+                        "message": "Gespeichert, aber das Benutzerkonto konnte nicht angepasst werden. Sag dem Netzwerkreferat Bescheid.",
                         "data": serializer.data,
                         "ldap_error": str(e)
                     },
@@ -170,21 +170,21 @@ def delete_tenant_view(request, tenant_id):
     if not username_to_delete:
         # If there is no username, we can just delete the DB entry.
         tenant.delete()
-        return Response({"message": "Tenant DB record deleted (no associated username)."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Bewohner gelöscht (ohne Benutzerkonto)."}, status=status.HTTP_204_NO_CONTENT)
 
     # Proceed with LDAP and DB deletion
     try:
         ldap_utils.delete_ldap_user(username_to_delete)
         tenant.delete()
         logger.info(f"Successfully deleted tenant '{username_to_delete}' from DB and LDAP.")
-        return Response({"message": f"Tenant '{username_to_delete}' was successfully deleted."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": f"Bewohner „{username_to_delete}“ gelöscht."}, status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
         logger.error(f"Failed to delete tenant '{username_to_delete}': {e}", exc_info=True)
         # The transaction will be rolled back, so the DB entry is not deleted if LDAP fails.
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
         logger.error(f"An unexpected error occurred while deleting tenant '{username_to_delete}': {e}", exc_info=True)
-        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Da ist etwas schiefgelaufen. Versuch's nochmal."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -223,7 +223,7 @@ def delete_rental_view(request, rental_id):
     rental_count = Rental.objects.filter(tenant=tenant).count()
     if rental_count <= 1:
         return Response(
-            {"error": "Cannot delete this rental: the tenant must have at least one rental record."},
+            {"error": "Der letzte Zimmereintrag eines Bewohners kann nicht gelöscht werden."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -276,7 +276,7 @@ def delete_rental_view(request, rental_id):
         )
 
     return Response(
-        {"message": f"Rental deleted. Tenant's current room updated to '{tenant.current_room}'."},
+        {"message": f"Umzug rückgängig gemacht. Aktuelles Zimmer: {tenant.current_room}."},
         status=status.HTTP_200_OK
     )
 
@@ -300,10 +300,10 @@ def move_tenant_view(request, tenant_id):
     # Find the current rental agreement to end it
     current_rental = Rental.objects.filter(tenant=tenant).order_by('-move_in').first()
     if not current_rental:
-        return Response({"error": "No current rental found for this tenant."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Für diesen Bewohner ist kein Zimmer eingetragen."}, status=status.HTTP_404_NOT_FOUND)
 
     if move_date <= current_rental.move_in:
-        return Response({"error": "Move date must be after the current move-in date."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Das Umzugsdatum muss nach dem Einzug ins aktuelle Zimmer liegen."}, status=status.HTTP_400_BAD_REQUEST)
         
     # End the current rental one day before the new move
     current_rental.moved_out = move_date - timedelta(days=1)
@@ -448,7 +448,7 @@ def create_new_tenant_view(request):
         except Exception as ldap_e:
             logger.error(f"Failed to revert LDAP creation for user '{username}'. Manual cleanup required. Error: {ldap_e}", exc_info=True)
         
-        return Response({"error": "Authentication entry was created, but failed to save tenant to database. Please contact support."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Der Bewohner konnte nicht gespeichert werden. Sag dem Netzwerkreferat Bescheid."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # 4. Send notification email to the new tenant
     email_context = {
@@ -466,13 +466,13 @@ def create_new_tenant_view(request):
     if not email_sent:
         logger.warning(f"Tenant '{username}' created, but the welcome email to {data['email']} failed to send.")
         return Response(
-            {"message": "Tenant created successfully, but the notification email could not be sent.",
+            {"message": "Bewohner angelegt, aber die Mail mit den Zugangsdaten ging nicht raus. Du kannst sie später erneut senden.",
              "username": username, "email_sent": False},
             status=status.HTTP_201_CREATED
         )
 
     return Response(
-        {"message": f"Tenant '{username}' created successfully and notification sent.",
+        {"message": f"Bewohner „{username}“ angelegt, die Zugangsdaten sind per Mail unterwegs.",
          "username": username, "email_sent": True},
         status=status.HTTP_201_CREATED
     )
@@ -526,7 +526,7 @@ def create_subtenant_view(request):
     except Exception as e:
         transaction.set_rollback(True)
         logger.error(f"DB Error for new subtenant '{data['email']}': {e}", exc_info=True)
-        return Response({"error": "Failed to save subtenant to database."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Der Untermieter konnte nicht gespeichert werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # 3. Create the account, or give the existing one a fresh password. Either way the
     # subtenant gets their credentials mailed, so re-adding a subtenant resends them.
@@ -669,11 +669,11 @@ def update_subtenant_view(request, subtenant_id):
                 transaction.set_rollback(True)
                 logger.error(f"Failed to update LDAP for subtenant '{old_email}': {e}", exc_info=True)
                 return Response(
-                    {"error": f"LDAP konnte nicht aktualisiert werden, nichts wurde gespeichert: {e}"},
+                    {"error": f"Das Benutzerkonto konnte nicht angepasst werden, nichts wurde gespeichert ({e})."},
                     status=status.HTTP_502_BAD_GATEWAY
                 )
         elif identity_changed:
-            ldap_warning = "Kein LDAP-Account für diesen Untermieter gefunden - nur SmartDorm wurde aktualisiert."
+            ldap_warning = "Kein Benutzerkonto für diesen Untermieter gefunden, nur SmartDorm wurde aktualisiert."
             logger.warning(f"Subtenant '{old_email}' updated, but no LDAP account was found to update.")
 
         new_tenant = Tenant.objects.filter(id=subtenant.tenant_id).first()
@@ -770,12 +770,12 @@ def list_department_signatures_view(request, department_slug):
     - `?signed=true`: Shows all signed signatures.
     """
     if department_slug not in DEPARTMENT_CONFIG:
-        return Response({"error": "Invalid department specified."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Dieses Referat gibt es nicht."}, status=status.HTTP_404_NOT_FOUND)
 
     config = DEPARTMENT_CONFIG[department_slug]
 
     if not user_in_groups(request.user, [config["group"]]):
-        return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"detail": "Dafür fehlen dir die Rechte."}, status=status.HTTP_403_FORBIDDEN)
 
     signed_status = request.query_params.get('signed', 'false').lower() == 'true'
     SENTINEL_DATE = date(1900, 1, 1)
@@ -812,24 +812,24 @@ def update_department_signature_view(request, signature_id):
     department_slug = next((slug for slug, conf in DEPARTMENT_CONFIG.items() if conf["name"] == signature.department_name), None)
     
     if not department_slug:
-        return Response({"error": "Signature belongs to an unknown department."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Diese Unterschrift gehört zu keinem bekannten Referat."}, status=status.HTTP_400_BAD_REQUEST)
 
     config = DEPARTMENT_CONFIG[department_slug]
 
     if not user_in_groups(request.user, [config["group"]]):
-        return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"detail": "Dafür fehlen dir die Rechte."}, status=status.HTTP_403_FORBIDDEN)
 
     if signature.departure.status == 'CLOSED':
-        return Response({"error": "Cannot update signature for a closed departure."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Der Auszug ist schon abgeschlossen, die Unterschrift lässt sich nicht mehr ändern."}, status=status.HTTP_403_FORBIDDEN)
 
     amount_str = request.data.get('amount')
     if amount_str is None:
-        return Response({"error": "Amount is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Gib einen Betrag an (0, wenn nichts offen ist)."}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
         signature.amount = Decimal(amount_str)
     except (TypeError, InvalidOperation):
-        return Response({"error": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der Betrag ist keine gültige Zahl."}, status=status.HTTP_400_BAD_REQUEST)
 
     # If the signature has the sentinel date, update it to today's date to "sign" it.
     SENTINEL_DATE = date(1900, 1, 1)
@@ -892,11 +892,11 @@ def list_departure_candidates_view(request):
 def create_departure_view(request):
     tenant_id = request.data.get('tenant_id')
     if not tenant_id:
-        return Response({"error": "Tenant ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Wähl einen Bewohner aus."}, status=status.HTTP_400_BAD_REQUEST)
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
     if Departure.objects.filter(tenant=tenant).exists():
-        return Response({"error": "Departure request for this tenant already exists."}, status=status.HTTP_409_CONFLICT)
+        return Response({"error": "Für diesen Bewohner läuft schon ein Auszug."}, status=status.HTTP_409_CONFLICT)
 
     departure = Departure.objects.create(
         tenant=tenant,
@@ -935,7 +935,7 @@ def list_departures_view(request):
     status_filter = request.query_params.get('status', '').upper()
     valid_statuses = [s.name for s in Departure.Status]
     if status_filter not in valid_statuses:
-        return Response({"error": f"Invalid status. Valid options are: {', '.join(valid_statuses)}"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": f"Ungültiger Status. Möglich: {', '.join(valid_statuses)}"}, status=status.HTTP_400_BAD_REQUEST)
 
     departures = Departure.objects.filter(status=status_filter).select_related('tenant')
 
@@ -954,7 +954,7 @@ def list_departures_view(request):
 def send_departure_reminder_view(request, departure_id):
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     if departure.status != Departure.Status.CREATED:
-        return Response({"error": "Can only send reminders for open departure requests."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Erinnerungen gehen nur bei offenen Auszügen."}, status=status.HTTP_400_BAD_REQUEST)
 
     pdf_data = {
         'Bewohnername': departure.tenant.name + " " + departure.tenant.surname,
@@ -977,9 +977,9 @@ def send_departure_reminder_view(request, departure_id):
     )
 
     if email_sent:
-        return Response({"message": "Reminder email sent successfully."}, status=status.HTTP_200_OK)
+        return Response({"message": "Erinnerung verschickt."}, status=status.HTTP_200_OK)
     else:
-        return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Die Erinnerung konnte nicht verschickt werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
@@ -1003,7 +1003,7 @@ def revert_departure_view(request, departure_id):
 def close_departure_view(request, departure_id):
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     if departure.status != Departure.Status.CONFIRMED:
-        return Response({"error": "Departure must be confirmed to be closed."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Nur bestätigte Auszüge können abgeschlossen werden."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Check if all signatures are done
     SENTINEL_DATE = date(1900, 1, 1)
@@ -1013,7 +1013,7 @@ def close_departure_view(request, departure_id):
     ).count()
 
     if unsigned_count > 0:
-        return Response({"error": f"{unsigned_count} department signature(s) are still missing."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": f"Es fehlen noch {unsigned_count} Unterschrift(en)."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Update tenant's move_out date if provided
     new_move_out_date_str = request.data.get('move_out_date')
@@ -1024,7 +1024,7 @@ def close_departure_view(request, departure_id):
             tenant.move_out = new_move_out_date
             tenant.save()
         except (ValueError, TypeError):
-            return Response({"error": "Invalid date format for move_out_date. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Ungültiges Auszugsdatum."}, status=status.HTTP_400_BAD_REQUEST)
 
     departure.status = Departure.Status.CLOSED
     departure.save()
@@ -1040,7 +1040,7 @@ def close_departure_view(request, departure_id):
         }
     )
 
-    return Response({"message": "Departure successfully closed."}, status=status.HTTP_200_OK)
+    return Response({"message": "Auszug abgeschlossen."}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
@@ -1059,7 +1059,7 @@ def download_departure_pdf_view(request, departure_id):
     # Ensure the PDF can only be generated for departures that are fully processed
     if departure.status != Departure.Status.CLOSED:
         return Response(
-            {"error": "PDF can only be generated for closed departures."},
+            {"error": "Das PDF gibt es erst, wenn der Auszug abgeschlossen ist."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -1086,7 +1086,7 @@ def list_claims_view(request):
     else:
         valid_statuses = [s.name for s in Claim.Status]
         if status_filter not in valid_statuses:
-            return Response({"error": f"Invalid status. Valid options are: {', '.join(valid_statuses)} or COMPLETED"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": f"Ungültiger Status. Möglich: {', '.join(valid_statuses)} oder COMPLETED"}, status=status.HTTP_400_BAD_REQUEST)
         queryset = Claim.objects.filter(status=status_filter).select_related('tenant').order_by('created_on')
 
     serializer = ClaimSerializer(queryset, many=True)
@@ -1098,7 +1098,7 @@ def list_claims_view(request):
 def send_claim_reminder_view(request, claim_id):
     claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
     if claim.status != Claim.Status.CREATED:
-        return Response({"error": "Can only send reminders for open claims."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Erinnerungen gehen nur bei offenen Anträgen."}, status=status.HTTP_400_BAD_REQUEST)
 
     tenant = claim.tenant
 
@@ -1119,8 +1119,8 @@ def send_claim_reminder_view(request, claim_id):
     )
 
     if email_sent:
-        return Response({"message": "Reminder email with application form sent successfully."}, status=status.HTTP_200_OK)
-    return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"message": "Erinnerung mit Antragsformular verschickt."}, status=status.HTTP_200_OK)
+    return Response({"error": "Die Erinnerung konnte nicht verschickt werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
@@ -1136,7 +1136,7 @@ def update_claim_status_view(request, claim_id):
         serializer = ClaimSerializer(claim)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
-    return Response({"error": f"Invalid status transition from {claim.status} to {new_status}."}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({"error": f"Der Antrag kann nicht von {claim.status} zu {new_status} wechseln."}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
@@ -1145,7 +1145,7 @@ def update_claim_status_view(request, claim_id):
 def process_claim_decision_view(request, claim_id):
     claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
     if claim.status != Claim.Status.PROCESSING:
-        return Response({"error": "Claim is not in 'PROCESSING' state."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der Antrag ist nicht in Bearbeitung."}, status=status.HTTP_400_BAD_REQUEST)
 
     decision = request.data.get('decision', '').upper()
     tenant = claim.tenant
@@ -1174,7 +1174,7 @@ def process_claim_decision_view(request, claim_id):
             }
         )
         
-        return Response({"message": "Claim rejected and departure confirmed."}, status=status.HTTP_200_OK)
+        return Response({"message": "Antrag abgelehnt, der Auszug läuft weiter."}, status=status.HTTP_200_OK)
 
     elif decision == 'APPROVED':
         claim.status = Claim.Status.APPROVED
@@ -1189,7 +1189,7 @@ def process_claim_decision_view(request, claim_id):
                 tenant.move_out = date.fromisoformat(new_move_out_date_str)
                 tenant.save()
             except (ValueError, TypeError):
-                return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Ungültiges Datum."}, status=status.HTTP_400_BAD_REQUEST)
         else:
             recalculate_tenant_contract_dates(tenant)
 
@@ -1206,9 +1206,9 @@ def process_claim_decision_view(request, claim_id):
             }
         )
         
-        return Response({"message": "Claim approved, tenant extended, and departure deleted."}, status=status.HTTP_200_OK)
+        return Response({"message": "Antrag genehmigt, die Wohnzeit ist verlängert."}, status=status.HTTP_200_OK)
 
-    return Response({"error": "Invalid decision. Must be 'APPROVED' or 'REJECTED'."}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({"error": "Ungültige Entscheidung."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 
@@ -1280,7 +1280,7 @@ def terminate_tenant_view(request, tenant_id):
     logger.info(f"Claims updated to REJECTED for tenant {tenant.username}: {claims_updated}")
     
     return Response(
-        {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
+        {"message": f"Vertrag von {tenant.username} gekündigt. Der Auszug ist gestartet."},
         status=status.HTTP_200_OK
     )
 
@@ -1314,9 +1314,9 @@ def manage_termination_view(request, tenant_id):
                 logger.info(f"Departure record deleted for tenant {tenant.username} due to termination revocation.")
             changes = recalculate_tenant_contract_dates(tenant)
             logger.info(f"Termination revoked for {tenant.username}. Changes: {changes}")
-            return Response({"message": "Termination revoked. Contract dates recalculated."}, status=status.HTTP_204_NO_CONTENT)
+            return Response({"message": "Kündigung zurückgenommen, die Wohnzeit ist neu berechnet."}, status=status.HTTP_204_NO_CONTENT)
         except Termination.DoesNotExist:
-            return Response({"error": "No termination found to delete."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Es gibt keine Kündigung zum Zurücknehmen."}, status=status.HTTP_404_NOT_FOUND)
 
 
 # --- DEPARTMENT EXTENSION MANAGEMENT ---
@@ -1333,7 +1333,7 @@ def manage_department_extensions_view(request, tenant_id=None):
 
     if request.method == 'GET':
         if not tenant_id:
-            return Response({"error": "Tenant ID required for listing."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Wähl einen Bewohner aus."}, status=status.HTTP_400_BAD_REQUEST)
         extensions = DepartmentExtension.objects.filter(tenant_id=tenant_id).order_by('-created_at')
         return Response(DepartmentExtensionSerializer(extensions, many=True).data)
 
@@ -1355,7 +1355,7 @@ def manage_department_extensions_view(request, tenant_id=None):
         changes = recalculate_tenant_contract_dates(tenant)
         logger.info(f"Department extension added for {tenant.username}. Changes: {changes}")
         
-        return Response({"message": "Extension added and contract recalculated."}, status=status.HTTP_201_CREATED)
+        return Response({"message": "Verlängerung eingetragen, die Wohnzeit ist neu berechnet."}, status=status.HTTP_201_CREATED)
 
 @api_view(['DELETE', 'PUT'])
 @authentication_classes([SessionAuthentication])
@@ -1373,7 +1373,7 @@ def update_department_extension_view(request, extension_id):
     if request.method == 'DELETE':
         extension.delete()
         changes = recalculate_tenant_contract_dates(tenant)
-        return Response({"message": "Extension deleted and contract recalculated."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Verlängerung gelöscht, die Wohnzeit ist neu berechnet."}, status=status.HTTP_204_NO_CONTENT)
     
     if request.method == 'PUT':
         # Simple update of note or months

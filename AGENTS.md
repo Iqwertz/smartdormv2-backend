@@ -72,7 +72,10 @@ docs/                        knowledge base; docs/todo.md = open bugs and projec
   rest. See [`docs/domain/contract-dates.md`](docs/domain/contract-dates.md).
 - **Domain constants go in `config.py`**, not inline in views.
 - **User-facing text is German and uses "du"** (lowercase mid-sentence, as grammar has it;
-  short forms like "Bewohner", no ":innen"): emails, and API messages the frontend shows.
+  short forms like "Bewohner", no ":innen"): emails, and every `error`/`message`/`detail`
+  an endpoint returns, since the frontend shows them as they are. DRF's own 403/404/CSRF texts
+  are translated in `smartdorm/exceptions.py`. Exception: responses only a machine reads
+  (the Pi agent and scan endpoints) stay English.
   Keep it short and friendly, the way a fellow resident would write it. The email templates
   are the reference. The full guide is `../smartdormv2-frontend/docs/voice-and-tone.md`.
   Logs and code comments stay in English.

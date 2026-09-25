@@ -29,7 +29,7 @@ def sync_ldap_email(tenant):
     """
     mails = ldap_utils.get_ldap_user_emails(tenant.username)
     if mails is None:
-        raise ValueError(f"Kein LDAP-Account '{tenant.username}' gefunden.")
+        raise ValueError(f"Kein Benutzerkonto „{tenant.username}“ gefunden.")
 
     if (tenant.email or '').strip().lower() in {m.strip().lower() for m in mails}:
         return False

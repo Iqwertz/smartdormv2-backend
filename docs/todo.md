@@ -41,6 +41,9 @@ once a semester.
   which has no route. The integration tests also need a test database, which can't be
   built from the `managed=False` legacy tables. Fix or delete them.
 
+- [x] **The password reset revealed which emails have an account.** Found and unknown addresses
+  got different success texts. Both now say the same (2026-09-25, API message translation).
+
 ## Projects
 
 - [ ] **Bring the access-rule rewrite to production.** It is merged into `development`

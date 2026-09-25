@@ -74,7 +74,7 @@ def tenants_for_select_view(request):
     except Exception as e:
         logger.error(f"Error retrieving recipients for select (filter: {include_filter}): {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving recipient list for selection."},
+            {"error": "Die Empfängerliste konnte nicht geladen werden."},
              status=status.HTTP_500_INTERNAL_SERVER_ERROR
          )
         
@@ -92,7 +92,7 @@ def departments_for_select_view(request):
     except Exception as e:
         logger.error(f"Error retrieving departments for select: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving department list."},
+            {"error": "Die Referate konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -112,6 +112,6 @@ def rooms_for_select_view(request):
     except Exception as e:
         logger.error(f"Error retrieving rooms for select: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving room list."},
+            {"error": "Die Zimmer konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

@@ -54,7 +54,7 @@ def device_status_view(request):
             # Use 200 OK instead of 404 so the frontend can handle it gracefully
             return Response(
                 {
-                    "error": "No active device found.",
+                    "error": "Der Drucker ist gerade nicht verfügbar.",
                     "device_id": None,
                     "device_name": None,
                     "location": None,
@@ -109,7 +109,7 @@ def device_status_view(request):
     except Exception as e:
         logger.error(f"Error in device_status_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving device status."},
+            {"error": "Der Druckerstatus konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -174,13 +174,13 @@ def my_costs_view(request):
         
     except Tenant.DoesNotExist:
         return Response(
-            {"error": "Tenant profile not found."},
+            {"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in my_costs_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving costs."},
+            {"error": "Deine Druckkosten konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -204,13 +204,13 @@ def my_sessions_view(request):
         
     except Tenant.DoesNotExist:
         return Response(
-            {"error": "Tenant profile not found."},
+            {"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in my_sessions_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving sessions."},
+            {"error": "Deine Sessions konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -237,13 +237,13 @@ def my_scans_view(request):
         
     except Tenant.DoesNotExist:
         return Response(
-            {"error": "Tenant profile not found."},
+            {"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in my_scans_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving scans."},
+            {"error": "Die Scans konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -265,14 +265,14 @@ def start_session_view(request):
         device = Device.objects.filter(is_active=True).first()
         if not device:
             return Response(
-                {"error": "No active device found."},
+                {"error": "Der Drucker ist gerade nicht verfügbar."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
         # Check if new sessions are allowed
         if not device.allow_new_sessions:
             return Response(
-                {"error": "New sessions are currently disabled."},
+                {"error": "Gerade können keine neuen Sessions gestartet werden."},
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -291,7 +291,7 @@ def start_session_view(request):
                 active_session.save()
             else:
                 return Response(
-                    {"error": "Device is currently in use."},
+                    {"error": "Der Drucker wird gerade von jemand anderem benutzt. Versuch's gleich nochmal."},
                     status=status.HTTP_409_CONFLICT
                 )
         
@@ -303,7 +303,7 @@ def start_session_view(request):
         
         if user_active_session:
             return Response(
-                {"error": "You already have an active session."},
+                {"error": "Du hast schon eine laufende Session."},
                 status=status.HTTP_409_CONFLICT
             )
         
@@ -320,13 +320,13 @@ def start_session_view(request):
         
     except Tenant.DoesNotExist:
         return Response(
-            {"error": "Tenant profile not found."},
+            {"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in start_session_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while starting session."},
+            {"error": "Die Session konnte nicht gestartet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -349,7 +349,7 @@ def session_detail_view(request, session_id):
         # Check if session belongs to user
         if session.tenant != tenant:
             return Response(
-                {"error": "Session not found or access denied."},
+                {"error": "Diese Session gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -441,13 +441,13 @@ def session_detail_view(request, session_id):
         
     except (Tenant.DoesNotExist, PrintSession.DoesNotExist):
         return Response(
-            {"error": "Session not found."},
+            {"error": "Diese Session gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in session_detail_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving session details."},
+            {"error": "Die Session konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -469,14 +469,14 @@ def end_session_view(request, session_id):
         # Check if session belongs to user
         if session.tenant != tenant:
             return Response(
-                {"error": "Session not found or access denied."},
+                {"error": "Diese Session gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
         # Check if session is still active
         if session.status != PrintSession.Status.ACTIVE:
             return Response(
-                {"error": "Session is not active."},
+                {"error": "Die Session läuft gerade nicht."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -491,13 +491,13 @@ def end_session_view(request, session_id):
         
     except (Tenant.DoesNotExist, PrintSession.DoesNotExist):
         return Response(
-            {"error": "Session not found."},
+            {"error": "Diese Session gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in end_session_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while ending session."},
+            {"error": "Die Session konnte nicht beendet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -522,20 +522,20 @@ def print_job_view(request, session_id):
         # Check if session belongs to user and is active
         if session.tenant != tenant:
             return Response(
-                {"error": "Session not found or access denied."},
+                {"error": "Diese Session gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
         if session.status != PrintSession.Status.ACTIVE:
             return Response(
-                {"error": "Session is not active."},
+                {"error": "Die Session läuft gerade nicht."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         # Check if file was uploaded
         if 'file' not in request.FILES:
             return Response(
-                {"error": "No file uploaded."},
+                {"error": "Wähl eine Datei aus."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -608,13 +608,13 @@ def print_job_view(request, session_id):
         
     except (Tenant.DoesNotExist, PrintSession.DoesNotExist):
         return Response(
-            {"error": "Session not found."},
+            {"error": "Diese Session gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in print_job_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while creating print job."},
+            {"error": "Der Druckauftrag konnte nicht angelegt werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -636,7 +636,7 @@ def session_jobs_view(request, session_id):
         # Check if session belongs to user
         if session.tenant != tenant:
             return Response(
-                {"error": "Session not found or access denied."},
+                {"error": "Diese Session gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -729,13 +729,13 @@ def session_jobs_view(request, session_id):
         
     except (Tenant.DoesNotExist, PrintSession.DoesNotExist):
         return Response(
-            {"error": "Session not found."},
+            {"error": "Diese Session gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in session_jobs_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving jobs."},
+            {"error": "Die Druckaufträge konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -757,14 +757,14 @@ def start_scan_view(request, session_id):
         # Check if session belongs to user
         if session.tenant != tenant:
             return Response(
-                {"error": "Session not found or access denied."},
+                {"error": "Diese Session gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
         # Check if session is still active
         if session.status != PrintSession.Status.ACTIVE:
             return Response(
-                {"error": "Session is not active."},
+                {"error": "Die Session läuft gerade nicht."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -787,24 +787,24 @@ def start_scan_view(request, session_id):
             logger.info(f"Queued scan request for session {session.external_id}: {session.pending_scan}")
             return Response({
                 "status": "queued",
-                "message": "Scan queued. The device will start scanning shortly."
+                "message": "Scan angefordert. Der Scanner legt gleich los."
             }, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Error queuing scan request: {e}", exc_info=True)
             return Response(
-                {"error": "An error occurred while starting scan."},
+                {"error": "Der Scan konnte nicht gestartet werden."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
     except (Tenant.DoesNotExist, PrintSession.DoesNotExist):
         return Response(
-            {"error": "Session not found."},
+            {"error": "Diese Session gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in start_scan_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while starting scan."},
+            {"error": "Der Scan konnte nicht gestartet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -826,7 +826,7 @@ def session_scans_view(request, session_id):
         # Check if session belongs to user
         if session.tenant != tenant:
             return Response(
-                {"error": "Session not found or access denied."},
+                {"error": "Diese Session gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -836,13 +836,13 @@ def session_scans_view(request, session_id):
         
     except (Tenant.DoesNotExist, PrintSession.DoesNotExist):
         return Response(
-            {"error": "Session not found."},
+            {"error": "Diese Session gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in session_scans_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving scans."},
+            {"error": "Die Scans konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -864,7 +864,7 @@ def download_scan_view(request, scan_id):
         # Check if scan belongs to user
         if scan.tenant != tenant:
             return Response(
-                {"error": "Scan not found or access denied."},
+                {"error": "Diesen Scan gibt es nicht."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -874,7 +874,7 @@ def download_scan_view(request, scan_id):
         if not os.path.exists(file_path):
             logger.warning(f"Scan file not found: {file_path}")
             return Response(
-                {"error": "File not found."},
+                {"error": "Die Datei gibt es nicht mehr."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -888,13 +888,13 @@ def download_scan_view(request, scan_id):
         
     except (Tenant.DoesNotExist, Scan.DoesNotExist):
         return Response(
-            {"error": "Scan not found."},
+            {"error": "Diesen Scan gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in download_scan_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while downloading scan."},
+            {"error": "Der Scan konnte nicht heruntergeladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1234,13 +1234,13 @@ def device_overview_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_overview_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving device overview."},
+            {"error": "Die Druckerübersicht konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1303,13 +1303,13 @@ def device_statistics_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_statistics_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving statistics."},
+            {"error": "Die Statistik konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1352,13 +1352,13 @@ def device_settings_update_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_settings_update_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while updating device settings."},
+            {"error": "Die Einstellungen konnten nicht gespeichert werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1383,13 +1383,13 @@ def device_toggle_active_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_toggle_active_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while toggling device."},
+            {"error": "Der Drucker konnte nicht umgeschaltet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1414,13 +1414,13 @@ def device_toggle_sessions_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_toggle_sessions_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while toggling sessions."},
+            {"error": "Die Sessions konnten nicht umgeschaltet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1445,7 +1445,7 @@ def device_terminate_session_view(request, device_id):
         
         if not active_session:
             return Response(
-                {"error": "No active session found."},
+                {"error": "Gerade läuft keine Session."},
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -1459,13 +1459,13 @@ def device_terminate_session_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_terminate_session_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while terminating session."},
+            {"error": "Die Session konnte nicht beendet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1505,13 +1505,13 @@ def device_history_view(request, device_id):
         
     except Device.DoesNotExist:
         return Response(
-            {"error": "Device not found."},
+            {"error": "Diesen Drucker gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in device_history_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving history."},
+            {"error": "Der Verlauf konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1603,7 +1603,7 @@ def tenant_billing_overview_view(request):
     except Exception as e:
         logger.error(f"Error in tenant_billing_overview_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving billing overview."},
+            {"error": "Die Abrechnung konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1633,7 +1633,7 @@ def settle_tenant_debt_view(request, tenant_id: int):
 
         return Response(
             {
-                "message": "Debt settled.",
+                "message": "Als bezahlt markiert.",
                 "tenant_id": tenant.id,
                 "settled_jobs": updated,
                 "settled_at": now,
@@ -1643,13 +1643,13 @@ def settle_tenant_debt_view(request, tenant_id: int):
 
     except Tenant.DoesNotExist:
         return Response(
-            {"error": "Tenant not found."},
+            {"error": "Diesen Bewohner gibt es nicht."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
         logger.error(f"Error in settle_tenant_debt_view: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while settling debt."},
+            {"error": "Das konnte nicht als bezahlt markiert werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

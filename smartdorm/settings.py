@@ -203,6 +203,8 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
     ],
+    # German "du" texts for DRF's own 403/404/login/CSRF messages
+    'EXCEPTION_HANDLER': 'smartdorm.exceptions.exception_handler',
 }
 
 # --- CSRF ---
