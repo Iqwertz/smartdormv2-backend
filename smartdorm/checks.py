@@ -27,7 +27,7 @@ def check_api_access_rules(app_configs, **kwargs):
                 "Decorate the view with @permission_classes([<rule>]) using one rule from "
                 "smartdorm/permissions.py (e.g. IsVerwaltung, LoggedIn). Plain DRF classes such as "
                 "IsAuthenticated are not accepted, and requirements set on the view function are "
-                "ignored by DRF. See docs/authentication_permissions.md."
+                "ignored by DRF. See docs/permissions.md."
             ),
             id="smartdorm.E001",
         ))

@@ -46,7 +46,7 @@ without a declaration.
 ### Where things live
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `smartdorm/permissions.py` | group names (`Groups`), all access rules, `user_in_groups()` |
 | `smartdorm/checks.py` | startup check `smartdorm.E001`: every API view declares exactly one rule |
 | `smartdorm/access_inventory.py` | walks all API endpoints; shared by the check, the command and the tests |
@@ -84,7 +84,7 @@ without a declaration.
 ### The available rules
 
 | Rule | Who gets in | Use for |
-|---|---|---|
+| --- | --- | --- |
 | `Public` | anyone, no login | login, password reset, the Pi scan monitor |
 | `LoggedIn` | any logged-in account | self-service endpoints that only touch the caller's own data (`Tenant.objects.get(username=request.user.username)`), and data every resident may see |
 | `CheckedInView` | logged in; **the view decides per object** | cases where the right groups depend on the object (attendance events, departure signatures). The view must call `user_in_groups()` |
@@ -197,7 +197,7 @@ password. Logging in with one goes through the real path (LDAP bind, group mirro
 employeeType), so you see SmartDorm exactly as that role does:
 
 | Account | Role |
-|---|---|
+| --- | --- |
 | `dev-bewohner` | resident without any role |
 | `dev-admin` | ADMIN (a resident account, like the real admins) |
 | `dev-verwaltung` | the Verwaltung account (`DEPARTMENT`) |
@@ -237,7 +237,7 @@ employeeType), so you see SmartDorm exactly as that role does:
   Check the frontend's group lists too.
 * **No "Access denied" line:** the refusal came from elsewhere. It could be the subtenant guard
   (`Blocked subtenant ...`), a per-object check inside a `CheckedInView` view, or Django's
-  CSRF protection on POST/PUT/DELETE (see the deployment guide).
+  CSRF protection on POST/PUT/DELETE (see [operations.md](operations.md#troubleshooting)).
 
 ### Related hardening
 
