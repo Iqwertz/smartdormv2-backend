@@ -2,6 +2,9 @@
 
 This document provides a high-level overview of the API structure. All endpoints are prefixed with `/api/`.
 
+Who may call which endpoint is not listed here, because it would drift. Run `python manage.py list_api_access`,
+or see `smartdorm/tests/api_access.txt` and [Authentication & Permissions](./authentication_permissions.md).
+
 ### Authentication (`/api/auth/`)
 *Handles user login, logout, and session status.*
 *   `POST /login/`: Authenticates a user against LDAP and creates a session.

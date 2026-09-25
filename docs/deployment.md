@@ -249,6 +249,7 @@ In each GitLab project (**frontend and backend**), go to **Settings > CI/CD > Va
 -   `SERVER_USER`: `smartdorm`
 -   `SSH_PRIVATE_KEY`: Private SSH key for the GitLab runner to access the VM. (See below)
 -   `ENV_FILE_CONTENT`: The full content of the `.env` file for the target environment.
+    On `development` only, `export SHOW_DEV_ACCOUNTS=True` adds the test-account picker to the login page (see [Authentication & Permissions](./authentication_permissions.md#trying-it-out-dev-accounts)). Never set it for `production`.
 
 #### Frontend Variables:
 -   `SERVER_IP`: IP of the target frontend VM.
@@ -331,6 +332,10 @@ With the setup complete, the deployment process is simple and automated:
     ```bash
     sudo systemctl status gunicorn
     ```
+
+-   **Deploy aborts with `smartdorm.E001`:** An API view does not declare exactly one access rule. `deploy.sh` stops at `migrate` before Gunicorn restarts, so the running version is unaffected. The error names the view; fix it as described in [Authentication & Permissions](./authentication_permissions.md).
+
+-   **403 Forbidden for a specific user or page:** An access rule refused the user. `grep "Access denied by" logs/smartdorm.log` shows who was refused and which group was missing; see *Troubleshooting a 403* in [Authentication & Permissions](./authentication_permissions.md).
 
 -   **403 Forbidden on POST/PUT/DELETE requests:** This is a Django CSRF protection error. It means the backend is not configured to trust your frontend's domain.
     -   In `smartdorm/settings.py`, verify that your frontend URL is in `CSRF_TRUSTED_ORIGINS`.

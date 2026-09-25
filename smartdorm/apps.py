@@ -37,5 +37,7 @@ class SmartdormConfig(AppConfig):
         Called when the application is ready.
         We connect the post_migrate signal here.
         """
+        from . import checks  # noqa: F401 - registers the API access check
+
         post_migrate.connect(initialize_global_settings, sender=self)
         logger.info("SmartdormConfig ready, post_migrate signal for GlobalAppSettings connected.")

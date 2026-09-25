@@ -14,7 +14,10 @@ class TenantSerializer(serializers.ModelSerializer):
             'move_out', 'name', 'nationality', 'note', 'probation_end', 'study_field',
             'sublet', 'surname', 'tel_number', 'university', 'username', 'new_address'
         ]
-        read_only_fields = ['id']  # ID is auto-generated
+        # The username names the tenant's LDAP account, which is created with it and cannot
+        # follow a rename. Writable, it would let an edit point this record - and with it a
+        # credential resend - at somebody else's account.
+        read_only_fields = ['id', 'username']
 
 class NewTenantSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)

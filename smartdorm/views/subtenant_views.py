@@ -10,7 +10,6 @@ import logging
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from ..permissions import IsSubtenant
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, IsSubtenant])
+@permission_classes([IsSubtenant])
 def my_profile_view(request):
     """Responds with the subtenant record of the logged-in account's running sublet."""
     subtenant = get_current_subtenant(request.user)

@@ -8,7 +8,6 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
@@ -30,7 +29,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from dateutil.relativedelta import relativedelta
 
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import LoggedIn
 from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
 from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer, MyEngagementApplicationSerializer
 from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
@@ -39,13 +38,12 @@ from .engagement_views import trigger_pdf_regeneration
 logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def profile_data_view(request):
     """
     Responds with the Tenant object associated with the currently logged-in user.
     """
-    profile_data_view.required_employee_types = ['TENANT']
 
     logged_in_username = request.user.username
 
@@ -68,7 +66,7 @@ def profile_data_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def calendar_proxy_view(request):
     """
     Fetches the ICS calendar file from the configured Nextcloud URL
@@ -116,7 +114,7 @@ def calendar_proxy_view(request):
     
     
 @api_view(['GET'])
-@permission_classes([IsAuthenticated]) # User must be logged in
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_engagements_view(request):
     """
@@ -152,7 +150,7 @@ def my_engagements_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def hsv_engagement_list_view(request):
     today = timezone.now().date()
     settings = GlobalAppSettings.load()
@@ -212,7 +210,7 @@ def hsv_engagement_list_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def get_global_settings_view(request):
     """
     API endpoint to retrieve all global application settings.
@@ -230,11 +228,9 @@ def get_global_settings_view(request):
         
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_departure_view(request):
-    my_departure_view.required_employee_types = ['TENANT']
-    
     try:
         tenant = Tenant.objects.get(username=request.user.username)
         departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
@@ -247,12 +243,10 @@ def my_departure_view(request):
         return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 @transaction.atomic
 def decide_departure_view(request):
-    decide_departure_view.required_employee_types = ['TENANT']
-
     decision = request.data.get('decision', '').upper()
     if decision not in ['CONFIRM', 'POSTPONE']:
         return Response({"error": "Invalid decision. Must be 'CONFIRM' or 'POSTPONE'."}, status=status.HTTP_400_BAD_REQUEST)
@@ -364,12 +358,10 @@ def decide_departure_view(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 @parser_classes([MultiPartParser, FormParser])
 def create_engagement_application_view(request):
-    create_engagement_application_view.required_employee_types = ['TENANT']
-
     settings = GlobalAppSettings.load()
     if not settings.applications_open:
         return Response({"error": "Applications are currently closed."}, status=status.HTTP_403_FORBIDDEN)
@@ -419,7 +411,7 @@ def create_engagement_application_view(request):
         return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def list_engagement_applications_view(request):
     settings = GlobalAppSettings.load()
@@ -470,7 +462,7 @@ def list_engagement_applications_view(request):
     return Response(results)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def get_application_image_view(request, app_id):
     """
@@ -505,11 +497,9 @@ def get_application_image_view(request, app_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_engagement_applications_view(request):
-    my_engagement_applications_view.required_employee_types = ['TENANT']
-
     try:
         tenant = Tenant.objects.get(username=request.user.username)
         applications = EngagementApplication.objects.filter(tenant=tenant).order_by('-semester', 'department__name')
@@ -519,11 +509,9 @@ def my_engagement_applications_view(request):
         return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def delete_engagement_application_view(request, app_id):
-    delete_engagement_application_view.required_employee_types = ['TENANT']
-
     settings = GlobalAppSettings.load()
     if not settings.applications_open:
         return Response({"error": "Applications are closed and cannot be modified."}, status=status.HTTP_403_FORBIDDEN)
@@ -548,13 +536,12 @@ def delete_engagement_application_view(request, app_id):
         return Response({"error": "Application not found or you do not have permission to delete it."}, status=status.HTTP_404_NOT_FOUND)
     
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_contract_calculation_view(request):
     """
     Returns a detailed breakdown of how the tenant's move_out date was calculated.
     """
-    my_contract_calculation_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)

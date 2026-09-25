@@ -3,14 +3,13 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Max, Q
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 
 from ..models import Tenant, Subtenant, Parcel, Room
 from ..serializers import ParcelSerializer, ParcelCreateRequestSerializer
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import IsVerwaltung
 from ..utils.email_utils import send_email_message
 
 import logging
@@ -58,14 +57,12 @@ def find_current_subtenants_by_name(name, surname):
 # --- API Views ---
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic # Ensure parcel creation and ID generation are atomic
 def create_parcel_view(request):
     """
     Creates a parcel for a tenant or subtenant and notifies them.
     """
-    create_parcel_view.required_groups = ['ADMIN', 'Verwaltung']
-    # create_parcel_view.required_employee_types = ['DEPARTMENT']
 
     request_serializer = ParcelCreateRequestSerializer(data=request.data)
     if not request_serializer.is_valid():
@@ -169,15 +166,13 @@ def create_parcel_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_parcels_view(request):
     """
     Lists parcels. By default, lists non-picked-up parcels.
     Query param `status=all` to list all parcels.
     Query param `status=pickedup` to list only picked-up parcels.
     """
-    list_parcels_view.required_groups = ['ADMIN', 'Verwaltung']
-    # list_parcels_view.required_employee_types = ['DEPARTMENT']
 
     parcel_status_filter = request.GET.get('status', 'pending').lower()
 
@@ -198,14 +193,12 @@ def list_parcels_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def pickup_parcel_view(request, external_id):
     """
     Marks a parcel as picked up.
     """
-    pickup_parcel_view.required_groups = ['ADMIN', 'Verwaltung']
-    # pickup_parcel_view.required_employee_types = ['DEPARTMENT'] 
 
     try:
         parcel = Parcel.objects.get(external_id=external_id)
