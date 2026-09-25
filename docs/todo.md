@@ -13,6 +13,11 @@ once a semester.
 - [ ] **Move-out confirmation mail says "Hallo {'Name'},".**
   [tenant_views.py:350](../smartdorm/views/tenant_views.py) passes `{tenant.name}`, which is a
   Python set, as `greeting`. It has been like this since 2973608. Fix: `tenant.name`.
+- [ ] **The rejection mail is missing a date.** `tenant-extension-rejection.html` uses
+  `{{departureDate0}}` ("… wird die Verwaltung das Zimmer zum {{departureDate0}} an einen neuen
+  Mieter vergeben"), but `process_claim_decision_view` only passes `departureDate`,
+  `departureDate1` and `departureDate2`, so the sentence ends with an empty date. Decide which
+  date is meant and pass it.
 - [ ] **Former tenants keep their LDAP groups.** The nightly `recalculate_tenant_stats` only
   reconciles *current* tenants, so after moving out, people keep their floor, Referat, HSV
   and default groups (wlan, wiki, Bewohner, tenant).
@@ -59,6 +64,8 @@ once a semester.
   (`department_views.py`) and `HEIMRAT_INFO_GROUPS` (`engagement_views.py`).
 - [ ] `run-server.sh` runs `makemigrations` on every start, so migrations can get generated
   (and committed) by accident. Only run `migrate` there.
+- [ ] `GET /api/tenants/calendar-proxy/` (Nextcloud calendar) isn't used by the frontend: the
+  calendar widget reads `api-rooms.schollheim.net` directly. Remove it, or switch the widget back.
 - [ ] Six `print()` calls in views and utils should use the module logger.
 - [ ] Move the 8-month window for departure candidates into `config.py`
   (`list_departure_candidates_view`).

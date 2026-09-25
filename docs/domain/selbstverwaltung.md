@@ -42,7 +42,10 @@ Every Referat is worth a fixed number of points per semester (`Department.points
 75 for the Barreferat, 25 for the Sportreferat, 25 for Flursprecher:innen). Residents
 collect them over their stay, and they count toward **longer leases and bigger rooms**.
 The **Zimmerreferat and the Verwaltung decide** on those benefits by hand. SmartDorm only
-keeps the tally, and must not automate the decisions.
+keeps the tally, and must not automate the decisions. For orientation, the resident dashboard
+shows the dorm's thresholds for extensions: 75, 150, 250, 300 and 350 points, then +50 per
+further extension, each due by move-in + sublet months + (n+1) years + 9 months
+(`smartdormv2-frontend/src/utils/extensionLogic.ts`).
 
 ## Who uses which part of SmartDorm
 

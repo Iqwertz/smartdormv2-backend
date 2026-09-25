@@ -215,7 +215,7 @@ In each GitLab project (**frontend and backend**), go to **Settings > CI/CD > Va
 -   `SERVER_IP`: IP of the target frontend VM.
 -   `SERVER_USER`: `smartdorm-fe`
 -   `SSH_PRIVATE_KEY`: Private SSH key for the GitLab runner to access the VM. (See below)
--   `VITE_API_BASE_URL`: The full URL to the corresponding backend API (e.g., `http://smartdormv2-api-dev.schollheim.net/api`).
+-   `VITE_API_BASE_URL`: The backend host **without** `/api` (e.g., `https://smartdormv2-api-dev.schollheim.net`). The frontend's service paths already start with `/api/`.
 
 ### SSH key for the GitLab runner
 
