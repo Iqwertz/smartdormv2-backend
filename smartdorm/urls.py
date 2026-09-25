@@ -152,6 +152,7 @@ department_urlpatterns = [
     path('tenant-data/<int:tenant_id>/terminate/', department_views.terminate_tenant_view, name='department-terminate-tenant'),
     path('tenant-data/<int:tenant_id>/termination/', department_views.manage_termination_view, name='department-manage-termination'),
     path('tenant-data/<int:tenant_id>/delete/', department_views.delete_tenant_view, name='department-delete-tenant'),
+    path('tenant-data/<int:tenant_id>/resend-credentials/', department_views.resend_tenant_credentials_view, name='department-resend-credentials'),
     path('tenant-data/<int:tenant_id>/subtenants/', department_views.list_subtenants_for_tenant_view, name='department-list-subtenants'),
     path('tenant-data/<int:tenant_id>/rentals/', department_views.list_tenant_rentals_view, name='department-list-rentals'),
     path('tenant-data/<int:tenant_id>/move/', department_views.move_tenant_view, name='department-move-tenant'),

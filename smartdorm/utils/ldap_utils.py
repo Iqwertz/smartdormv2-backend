@@ -189,6 +189,60 @@ def update_ldap_password(username, new_password):
         if 'con' in locals() and con:
             con.unbind_s()
 
+
+# The attributes update_ldap_password() writes - together they are "the password"
+PASSWORD_ATTRIBUTES = ['userPassword', 'sambaNTPassword']
+
+def get_ldap_password_hashes(username):
+    """
+    Returns the raw password hashes of an LDAP user as {attribute: [bytes, ...]}, so a
+    password change can be undone with restore_ldap_password_hashes().
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        _, attrs = con.search_s(user_dn, ldap.SCOPE_BASE, attrlist=PASSWORD_ATTRIBUTES)[0]
+        return {attr: attrs.get(attr, []) for attr in PASSWORD_ATTRIBUTES}
+
+    except ldap.NO_SUCH_OBJECT:
+        raise ValueError(f"User '{username}' does not exist in LDAP.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while reading password hashes of '{username}': {e}")
+        raise ConnectionError(f"Could not read user from the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def restore_ldap_password_hashes(username, hashes):
+    """Writes back hashes previously read with get_ldap_password_hashes()."""
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # MOD_REPLACE with an empty list removes an attribute that was absent before
+        con.modify_s(user_dn, [(ldap.MOD_REPLACE, attr, values) for attr, values in hashes.items()])
+        logger.info(f"Restored previous password of LDAP user '{username}'.")
+        return True
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while restoring password of '{username}': {e}")
+        raise ConnectionError(f"Could not restore password in the authentication server: {e}")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
             
 def add_user_to_group(username, group_dn):
     """Adds an existing LDAP user to a specified LDAP group."""

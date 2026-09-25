@@ -18,7 +18,7 @@ import re
 from ..permissions import GroupAndEmployeeTypePermission
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
-from ..utils import ldap_utils, email_utils, pdf_utils
+from ..utils import ldap_utils, email_utils, pdf_utils, credential_utils
 from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, find_subtenant_account, subtenant_base_username, SUBTENANT_EMPLOYEE_TYPE
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
@@ -99,7 +99,6 @@ def update_tenant_view(request, tenant_id):
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
     # Store old values to detect changes
-    old_email = tenant.email
     old_name = tenant.name
     old_surname = tenant.surname
     
@@ -111,26 +110,23 @@ def update_tenant_view(request, tenant_id):
     if serializer.is_valid():
         serializer.save()
         
-        # Check if email, name, or surname changed and update LDAP
-        if tenant.username and (
-            tenant.email != old_email or 
-            tenant.name != old_name or 
-            tenant.surname != old_surname
-        ):
+        # Keep the LDAP account in step. The mail is compared against LDAP itself rather
+        # than the old DB value, so saving also repairs a mail that drifted earlier.
+        if tenant.username:
             try:
+                credential_utils.sync_ldap_email(tenant)
+
                 name_changed = tenant.name != old_name
                 surname_changed = tenant.surname != old_surname
-                
-                ldap_utils.update_ldap_user_attributes(
-                    username=tenant.username,
-                    email=tenant.email if tenant.email != old_email else None,
-                    first_name=tenant.name if name_changed else None,
-                    last_name=tenant.surname if surname_changed else None
-                )
-                logger.info(f"Successfully updated LDAP attributes for tenant '{tenant.username}'")
+                if name_changed or surname_changed:
+                    ldap_utils.update_ldap_user_attributes(
+                        username=tenant.username,
+                        first_name=tenant.name if name_changed else None,
+                        last_name=tenant.surname if surname_changed else None
+                    )
             except (ValueError, ConnectionError) as e:
                 logger.error(f"Failed to update LDAP for tenant '{tenant.username}': {e}", exc_info=True)
-                # Log warning but don't fail the entire operation - DB was successfully updated
+                # DB was saved - report the LDAP problem instead of failing the whole update
                 return Response(
                     {
                         "message": "Tenant updated successfully, but LDAP sync failed. Manual synchronization may be needed.",
@@ -139,9 +135,39 @@ def update_tenant_view(request, tenant_id):
                     },
                     status=status.HTTP_200_OK
                 )
-        
+
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+def resend_tenant_credentials_view(request, tenant_id):
+    """
+    Mails the tenant a new password, as a welcome mail or a password reset mail
+    (body: {"kind": "WELCOME" | "PASSWORD_RESET"}). The old password stays valid if the
+    mail cannot be sent.
+    """
+    resend_tenant_credentials_view.required_groups = VERWALTUNG_ADMIN_GROUPS
+    resend_tenant_credentials_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    kind = request.data.get('kind')
+    if kind not in credential_utils.TEMPLATES:
+        return Response({"error": "Unbekannte E-Mail-Art."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        sent = credential_utils.resend_credentials(tenant, kind)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ConnectionError as e:
+        logger.error(f"LDAP error while resending credentials to '{tenant.username}': {e}", exc_info=True)
+        return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if not sent:
+        logger.warning(f"Resending credentials ({kind}) to '{tenant.username}' failed; old password kept.")
+    return Response({"email_sent": sent}, status=status.HTTP_200_OK)
 
 
 @api_view(['DELETE'])
@@ -633,6 +659,7 @@ def get_subtenant_detail_view(request, subtenant_id):
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@transaction.atomic
 def update_subtenant_view(request, subtenant_id):
     update_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
     update_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
@@ -644,9 +671,49 @@ def update_subtenant_view(request, subtenant_id):
         data = serializer.validated_data
         # Reassigning the subtenant to a different main tenant also moves their floor
         old_floor = subtenant.tenant.current_floor
+        old_email, old_name, old_surname = subtenant.email, subtenant.name, subtenant.surname
+
+        # The email is the only link between a subtenant and their LDAP account, so the
+        # account has to be resolved with the old values - before they are overwritten.
+        identity_changed = (
+            data.get('email', old_email) != old_email
+            or data.get('name', old_name) != old_name
+            or data.get('surname', old_surname) != old_surname
+        )
+        account_username = None
+        if identity_changed:
+            try:
+                account_username = find_subtenant_account(old_email, old_name, old_surname)
+            except ConnectionError as e:
+                return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
+
+        ldap_warning = None
+        if identity_changed and account_username:
+            email_changed = subtenant.email != old_email
+            name_changed = subtenant.name != old_name
+            surname_changed = subtenant.surname != old_surname
+            try:
+                ldap_utils.update_ldap_user_attributes(
+                    username=account_username,
+                    email=subtenant.email if email_changed else None,
+                    first_name=subtenant.name if name_changed else None,
+                    last_name=subtenant.surname if surname_changed else None,
+                )
+            except (ValueError, ConnectionError) as e:
+                # Saving the row anyway would cut the link to the account for good
+                transaction.set_rollback(True)
+                logger.error(f"Failed to update LDAP for subtenant '{old_email}': {e}", exc_info=True)
+                return Response(
+                    {"error": f"LDAP konnte nicht aktualisiert werden, nichts wurde gespeichert: {e}"},
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
+        elif identity_changed:
+            ldap_warning = "Kein LDAP-Account für diesen Untermieter gefunden - nur SmartDorm wurde aktualisiert."
+            logger.warning(f"Subtenant '{old_email}' updated, but no LDAP account was found to update.")
 
         new_tenant = Tenant.objects.filter(id=subtenant.tenant_id).first()
         new_floor = new_tenant.current_floor if new_tenant else None
@@ -661,9 +728,12 @@ def update_subtenant_view(request, subtenant_id):
 
         recalculate_tenant_contract_dates(subtenant.tenant)
 
-        return Response(SubtenantSerializer(subtenant).data)
+        response_data = SubtenantSerializer(subtenant).data
+        if ldap_warning:
+            response_data['ldap_warning'] = ldap_warning
+        return Response(response_data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
