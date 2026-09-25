@@ -48,7 +48,7 @@ The transactional mapping representing a successful check-in.
 The business logic is implemented in `smartdorm/views/attendance_views.py`.
 
 ### Security & Authorization
-The endpoints utilize a customized `GroupAndEmployeeTypePermission` architecture. When an admin attempts to access or modify an event, the system checks if the user's LDAP groups intersect with the `admin_groups` JSON array configured on the target `Event`.
+The management endpoints declare the `CheckedInView` access rule (see [authentication_permissions.md](authentication_permissions.md)): any logged-in account gets past the door, and `_is_event_admin()` then checks, per event, whether the user's LDAP groups intersect with the `admin_groups` JSON array configured on the target `Event` (ADMIN always passes). Creating an event requires Heimrat or Netzwerkreferat.
 
 ### QR Token Rotation
 When a session is marked `is_active`, the frontend projector periodically polls the `/api/attendance/sessions/<id>/qr_token/` endpoint. 

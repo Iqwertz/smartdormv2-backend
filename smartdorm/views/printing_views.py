@@ -14,7 +14,6 @@ from datetime import timedelta
 from decimal import Decimal
 
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
@@ -26,32 +25,9 @@ from ..serializers import (
     PrintSessionDetailSerializer, PrintJobSerializer, PrintJobCreateSerializer, ScanSerializer
 )
 from ..utils.cups_utils import submit_print_job, get_job_status, is_job_completed, is_job_failed
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import Public, LoggedIn, HasDeviceToken, IsVerwaltung
 
 logger = logging.getLogger(__name__)
-
-
-def _agent_token_ok(request):
-    """
-    Validates the shared secret sent by the Pi agent on the outbound polling
-    endpoints. Accepts either "Authorization: Bearer <token>" or
-    "X-Device-Token: <token>".
-
-    Returns True when settings.DEVICE_AGENT_TOKEN is configured and matches.
-    If no token is configured (None/empty), access is denied to avoid leaking
-    print documents by accident.
-    """
-    expected = getattr(settings, 'DEVICE_AGENT_TOKEN', None)
-    if not expected:
-        logger.warning("DEVICE_AGENT_TOKEN not configured; rejecting agent request.")
-        return False
-    auth = request.META.get('HTTP_AUTHORIZATION', '')
-    token = ''
-    if auth.startswith('Bearer '):
-        token = auth[len('Bearer '):].strip()
-    if not token:
-        token = request.META.get('HTTP_X_DEVICE_TOKEN', '').strip()
-    return bool(token) and token == expected
 
 
 # ============================================================================
@@ -60,7 +36,7 @@ def _agent_token_ok(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def device_status_view(request):
     """
     GET /api/tenants/printing/device-status/
@@ -69,7 +45,6 @@ def device_status_view(request):
     - Available/Occupied
     - Active session info (if available)
     """
-    device_status_view.required_employee_types = ['TENANT']
     
     try:
         # Get the first (and only) device
@@ -141,14 +116,13 @@ def device_status_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def my_costs_view(request):
     """
     GET /api/tenants/printing/my-costs/
     
     Returns cost overview for the logged-in user.
     """
-    my_costs_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -213,14 +187,13 @@ def my_costs_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def my_sessions_view(request):
     """
     GET /api/tenants/printing/my-sessions/
     
     Returns all sessions of the logged-in user.
     """
-    my_sessions_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -244,14 +217,13 @@ def my_sessions_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def my_scans_view(request):
     """
     GET /api/tenants/printing/my-scans/
     
     Returns all scans of the logged-in user (from all sessions).
     """
-    my_scans_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -278,14 +250,13 @@ def my_scans_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def start_session_view(request):
     """
     POST /api/tenants/printing/sessions/start/
     
     Starts a new print session for the logged-in user.
     """
-    start_session_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -362,7 +333,7 @@ def start_session_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def session_detail_view(request, session_id):
     """
     GET /api/tenants/printing/sessions/{session_id}/
@@ -370,7 +341,6 @@ def session_detail_view(request, session_id):
     Returns session details (including jobs and scans).
     Automatically updates the status of active print jobs.
     """
-    session_detail_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -484,14 +454,13 @@ def session_detail_view(request, session_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def end_session_view(request, session_id):
     """
     POST /api/tenants/printing/sessions/{session_id}/end/
     
     Ends a user's own session.
     """
-    end_session_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -535,7 +504,7 @@ def end_session_view(request, session_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @parser_classes([MultiPartParser, FormParser])  # Allows multipart/form-data for file uploads
 @transaction.atomic
 def print_job_view(request, session_id):
@@ -545,7 +514,6 @@ def print_job_view(request, session_id):
     Creates a new print job within a session.
     Expects multipart form with file upload.
     """
-    print_job_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -653,14 +621,13 @@ def print_job_view(request, session_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def session_jobs_view(request, session_id):
     """
     GET /api/tenants/printing/sessions/{session_id}/jobs/
     
     Returns all print jobs of a session and updates the status of active jobs.
     """
-    session_jobs_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -775,14 +742,13 @@ def session_jobs_view(request, session_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def start_scan_view(request, session_id):
     """
     POST /api/tenants/printing/sessions/{session_id}/scan/start/
     
     Starts a scan at the printer via Pi service.
     """
-    start_scan_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -845,14 +811,13 @@ def start_scan_view(request, session_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def session_scans_view(request, session_id):
     """
     GET /api/tenants/printing/sessions/{session_id}/scans/
     
     Returns all scans of a session.
     """
-    session_scans_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -884,14 +849,13 @@ def session_scans_view(request, session_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def download_scan_view(request, scan_id):
     """
     GET /api/tenants/printing/scans/{scan_id}/download/
     
     Downloads a scanned document.
     """
-    download_scan_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -940,7 +904,7 @@ def download_scan_view(request, scan_id):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([])  # No authentication required
+@permission_classes([Public])
 def active_session_view(request):
     """
     GET /api/printing/active-session/
@@ -988,7 +952,7 @@ def active_session_view(request):
 
 
 @api_view(['POST'])
-@permission_classes([])  # No authentication required
+@permission_classes([Public])
 @parser_classes([MultiPartParser, FormParser])  # Allows multipart/form-data for file uploads
 def upload_scan_view(request):
     """
@@ -1080,7 +1044,7 @@ def upload_scan_view(request):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([])  # auth via shared device token
+@permission_classes([HasDeviceToken])
 def agent_commands_view(request):
     """
     GET /api/printing/agent/commands/
@@ -1088,8 +1052,6 @@ def agent_commands_view(request):
     Polled by the Pi agent. Returns pending print jobs for the active device and
     any pending scan request on the active session. Token-protected.
     """
-    if not _agent_token_ok(request):
-        return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
 
     device = Device.objects.filter(is_active=True).first()
     if not device:
@@ -1134,15 +1096,13 @@ def agent_commands_view(request):
 
 
 @api_view(['GET'])
-@permission_classes([])  # auth via shared device token
+@permission_classes([HasDeviceToken])
 def agent_job_file_view(request, job_id):
     """
     GET /api/printing/agent/jobs/<job_id>/file/
 
     Streams the stored PDF for a print job to the Pi agent. Token-protected.
     """
-    if not _agent_token_ok(request):
-        return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
     try:
         job = PrintJob.objects.get(external_id=job_id)
     except PrintJob.DoesNotExist:
@@ -1153,7 +1113,7 @@ def agent_job_file_view(request, job_id):
 
 
 @api_view(['POST'])
-@permission_classes([])  # auth via shared device token
+@permission_classes([HasDeviceToken])
 def agent_job_status_view(request, job_id):
     """
     POST /api/printing/agent/jobs/<job_id>/status/
@@ -1162,8 +1122,6 @@ def agent_job_status_view(request, job_id):
     {"status": "PRINTING"|"COMPLETED"|"FAILED"|"CANCELLED",
      "cups_job_id": "...", "pages": N, "error_message": "..."}. Token-protected.
     """
-    if not _agent_token_ok(request):
-        return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
     try:
         job = PrintJob.objects.get(external_id=job_id)
     except PrintJob.DoesNotExist:
@@ -1210,14 +1168,13 @@ def agent_job_status_view(request, job_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_overview_view(request, device_id):
     """
     GET /api/printing/device/{device_id}/overview/
     
     Overview with status, costs, statistics for a device.
     """
-    device_overview_view.required_employee_types = ['DEPARTMENT']
     # TODO: Check if user is in the responsible department
     
     try:
@@ -1290,7 +1247,7 @@ def device_overview_view(request, device_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_statistics_view(request, device_id):
     """
     GET /api/printing/device/{device_id}/statistics/
@@ -1298,7 +1255,6 @@ def device_statistics_view(request, device_id):
     Detailed statistics with optional time period parameters.
     Query params: start_date, end_date (optional)
     """
-    device_statistics_view.required_employee_types = ['DEPARTMENT']
     
     try:
         device = Device.objects.get(id=device_id)
@@ -1360,14 +1316,13 @@ def device_statistics_view(request, device_id):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_settings_update_view(request, device_id):
     """
     PUT /api/printing/device/{device_id}/settings/
     
     Updates device settings (price, session duration, etc.)
     """
-    device_settings_update_view.required_employee_types = ['DEPARTMENT']
     
     try:
         device = Device.objects.get(id=device_id)
@@ -1410,14 +1365,13 @@ def device_settings_update_view(request, device_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_toggle_active_view(request, device_id):
     """
     POST /api/printing/device/{device_id}/toggle-active/
     
     Toggles device on/off globally.
     """
-    device_toggle_active_view.required_employee_types = ['DEPARTMENT']
     
     try:
         device = Device.objects.get(id=device_id)
@@ -1442,14 +1396,13 @@ def device_toggle_active_view(request, device_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_toggle_sessions_view(request, device_id):
     """
     POST /api/printing/device/{device_id}/toggle-sessions/
     
     Allows/blocks new sessions.
     """
-    device_toggle_sessions_view.required_employee_types = ['DEPARTMENT']
     
     try:
         device = Device.objects.get(id=device_id)
@@ -1474,14 +1427,13 @@ def device_toggle_sessions_view(request, device_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_terminate_session_view(request, device_id):
     """
     POST /api/printing/device/{device_id}/terminate-session/
     
     Terminates the active session of the device.
     """
-    device_terminate_session_view.required_employee_types = ['DEPARTMENT']
     
     try:
         device = Device.objects.get(id=device_id)
@@ -1520,7 +1472,7 @@ def device_terminate_session_view(request, device_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def device_history_view(request, device_id):
     """
     GET /api/printing/device/{device_id}/history/
@@ -1528,7 +1480,6 @@ def device_history_view(request, device_id):
     Print history with optional filters.
     Query params: start_date, end_date, status (optional)
     """
-    device_history_view.required_employee_types = ['DEPARTMENT']
     
     try:
         device = Device.objects.get(id=device_id)
@@ -1567,7 +1518,7 @@ def device_history_view(request, device_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def tenant_billing_overview_view(request):
     """
     GET /api/printing/tenant-billing-overview/
@@ -1575,7 +1526,6 @@ def tenant_billing_overview_view(request):
     Returns billing overview for all tenants who have print costs.
     Only tenants with costs > 0 are included.
     """
-    tenant_billing_overview_view.required_employee_types = ['DEPARTMENT']
     
     try:
         from django.db.models import Count
@@ -1660,7 +1610,7 @@ def tenant_billing_overview_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def settle_tenant_debt_view(request, tenant_id: int):
     """
@@ -1668,8 +1618,6 @@ def settle_tenant_debt_view(request, tenant_id: int):
 
     Marks all outstanding completed print jobs as settled by setting settled_at=now().
     """
-    settle_tenant_debt_view.required_employee_types = ['DEPARTMENT']
-    settle_tenant_debt_view.required_groups = ['VERWALTUNG', 'ADMIN']
 
     try:
         tenant = Tenant.objects.get(id=tenant_id)

@@ -1,0 +1,155 @@
+CanViewResidentEngagements - Heimrat, Inforeferat, Zimmerreferat, Finanzenreferat, Schlichtungsreferat, HSV-Vertreter, ADMIN
+  GET             /api/engagements/misc/tenant-overview-data/
+
+CanViewResidentOverview - Heimrat, Inforeferat, Zimmerreferat, Finanzenreferat, Schlichtungsreferat, ADMIN
+  GET             /api/engagements/export_tenants-csv/
+  GET             /api/engagements/misc/engagement-overview-data/
+
+CanViewResidentStatistics - Heimrat, Inforeferat, Zimmerreferat, Finanzenreferat, HSV-Vertreter, ADMIN
+  GET             /api/engagements/misc/tenant-statistics/
+
+CheckedInView - logged in + per-object check inside the view
+  DELETE          /api/attendance/sessions/<int:session_id>/delete/
+  DELETE,GET,PUT  /api/attendance/events/<int:event_id>/
+  GET             /api/attendance/events/<int:event_id>/base-attendance/
+  GET             /api/attendance/events/<int:event_id>/base-attendance/<int:tenant_id>/
+  GET             /api/attendance/events/manageable/
+  GET             /api/attendance/sessions/<int:session_id>/current-token/
+  GET             /api/attendance/sessions/<int:session_id>/report/
+  GET             /api/department/signatures/<str:department_slug>/list/
+  GET,POST        /api/attendance/events/
+  GET,POST        /api/attendance/events/<int:event_id>/sessions/
+  POST            /api/attendance/events/<int:event_id>/base-attendance/<int:tenant_id>/update/
+  POST            /api/attendance/sessions/<int:session_id>/override/
+  POST            /api/attendance/sessions/<int:session_id>/start/
+  POST            /api/attendance/sessions/<int:session_id>/stop/
+  POST            /api/attendance/sessions/<int:session_id>/toggle-status/
+  PUT             /api/department/signatures/<int:signature_id>/update/
+
+HasDeviceToken - Pi print agent (device token)
+  GET             /api/printing/agent/commands/
+  GET             /api/printing/agent/jobs/<str:job_id>/file/
+  POST            /api/printing/agent/jobs/<str:job_id>/status/
+
+IsEngagementManager - Heimrat, Inforeferat, ADMIN
+  DELETE          /api/engagements/heimrat/engagements/<int:engagement_id>/delete/
+  GET             /api/engagements/heimrat/engagements/list/
+  POST            /api/engagements/heimrat/engagements/compensate-all/
+  POST            /api/engagements/heimrat/engagements/create/
+  PUT             /api/engagements/heimrat/engagements/<int:engagement_id>/toggle-compensate/
+  PUT             /api/engagements/heimrat/engagements/<int:engagement_id>/update/
+
+IsHeimrat - Heimrat, ADMIN
+  DELETE          /api/engagements/heimrat/applications/<int:app_id>/delete/
+  GET             /api/engagements/heimrat/applications/<int:app_id>/image/
+  GET             /api/engagements/heimrat/applications/list/
+  POST            /api/engagements/heimrat/applications/create/
+  POST            /api/engagements/heimrat/update-semester-and-ldap/
+
+IsNetworkAdmin - Netzwerkreferat, ADMIN
+  DELETE          /api/engagements/departments/<int:department_id>/delete/
+  DELETE          /api/network/ldap-roles/<int:assignment_id>/delete/
+  GET             /api/engagements/departments/list/
+  GET             /api/engagements/logs/
+  GET             /api/engagements/misc/export-engagement-tenants-csv/
+  GET             /api/network/ldap-groups/
+  GET             /api/network/ldap-roles/
+  GET             /api/network/ldap-users/
+  POST            /api/engagements/departments/create/
+  POST            /api/network/ldap-roles/create/
+  PUT             /api/engagements/departments/<int:department_id>/update/
+
+IsSemesterManager - Heimrat, Netzwerkreferat, ADMIN
+  POST            /api/engagements/heimrat/set-applications-open/
+  POST            /api/engagements/heimrat/set-semester/
+  POST            /api/engagements/heimrat/set-show-applications/
+
+IsSubtenant - subtenant accounts only
+  GET             /api/subtenant/profile-data/
+
+IsVerwaltung - VERWALTUNG, ADMIN
+  DELETE          /api/department/rentals/<int:rental_id>/delete/
+  DELETE          /api/department/subtenants/<int:subtenant_id>/delete/
+  DELETE          /api/department/tenant-data/<int:tenant_id>/delete/
+  DELETE,GET      /api/department/tenant-data/<int:tenant_id>/termination/
+  DELETE,PUT      /api/department/department-extensions/<int:extension_id>/
+  GET             /api/common/room-list/
+  GET             /api/common/tenant-list/
+  GET             /api/department/claims/list/
+  GET             /api/department/departures/<int:departure_id>/download-pdf/
+  GET             /api/department/departures/candidates/
+  GET             /api/department/departures/list/
+  GET             /api/department/parcels/list/
+  GET             /api/department/subtenants/<int:subtenant_id>/
+  GET             /api/department/subtenants/list/
+  GET             /api/department/tenant-data/
+  GET             /api/department/tenant-data/<int:tenant_id>/
+  GET             /api/department/tenant-data/<int:tenant_id>/rentals/
+  GET             /api/department/tenant-data/<int:tenant_id>/subtenants/
+  GET             /api/printing/device/<int:device_id>/history/
+  GET             /api/printing/device/<int:device_id>/overview/
+  GET             /api/printing/device/<int:device_id>/statistics/
+  GET             /api/printing/tenant-billing-overview/
+  GET,POST        /api/department/department-extensions/create/
+  GET,POST        /api/department/tenant-data/<int:tenant_id>/department-extensions/
+  POST            /api/department/claims/<int:claim_id>/decide/
+  POST            /api/department/claims/<int:claim_id>/remind/
+  POST            /api/department/claims/<int:claim_id>/status/
+  POST            /api/department/create-new-tenant/
+  POST            /api/department/departures/<int:departure_id>/close/
+  POST            /api/department/departures/<int:departure_id>/remind/
+  POST            /api/department/departures/<int:departure_id>/revert/
+  POST            /api/department/departures/create/
+  POST            /api/department/parcels/<str:external_id>/pickup/
+  POST            /api/department/parcels/create/
+  POST            /api/department/subtenants/create/
+  POST            /api/department/tenant-data/<int:tenant_id>/move/
+  POST            /api/department/tenant-data/<int:tenant_id>/resend-credentials/
+  POST            /api/department/tenant-data/<int:tenant_id>/terminate/
+  POST            /api/printing/device/<int:device_id>/terminate-session/
+  POST            /api/printing/device/<int:device_id>/toggle-active/
+  POST            /api/printing/device/<int:device_id>/toggle-sessions/
+  POST            /api/printing/tenant/<int:tenant_id>/settle-debt/
+  PUT             /api/department/subtenants/<int:subtenant_id>/update/
+  PUT             /api/department/tenant-data/<int:tenant_id>/update/
+  PUT             /api/printing/device/<int:device_id>/settings/
+
+LoggedIn - any logged-in account
+  DELETE          /api/tenants/engagement-application/<int:app_id>/delete/
+  GET             /api/attendance/my-history/
+  GET             /api/auth/me/
+  GET             /api/common/departments-for-select/
+  GET             /api/tenants/calendar-proxy/
+  GET             /api/tenants/engagement-application/<int:app_id>/image/
+  GET             /api/tenants/engagement-applications/
+  GET             /api/tenants/engagement-applications/pdf/
+  GET             /api/tenants/global-settings/
+  GET             /api/tenants/hsv/
+  GET             /api/tenants/my-contract-calculation/
+  GET             /api/tenants/my-departure/
+  GET             /api/tenants/my-engagement-applications/
+  GET             /api/tenants/my-engagements/
+  GET             /api/tenants/printing/device-status/
+  GET             /api/tenants/printing/my-costs/
+  GET             /api/tenants/printing/my-scans/
+  GET             /api/tenants/printing/my-sessions/
+  GET             /api/tenants/printing/scans/<str:scan_id>/download/
+  GET             /api/tenants/printing/sessions/<str:session_id>/
+  GET             /api/tenants/printing/sessions/<str:session_id>/jobs/
+  GET             /api/tenants/printing/sessions/<str:session_id>/scans/
+  GET             /api/tenants/profile-data/
+  POST            /api/attendance/scan/
+  POST            /api/auth/logout/
+  POST            /api/auth/password-change/
+  POST            /api/tenants/engagement-application/
+  POST            /api/tenants/my-departure/decide/
+  POST            /api/tenants/printing/sessions/<str:session_id>/end/
+  POST            /api/tenants/printing/sessions/<str:session_id>/print/
+  POST            /api/tenants/printing/sessions/<str:session_id>/scan/start/
+  POST            /api/tenants/printing/sessions/start/
+
+Public - anyone, no login
+  GET             /api/printing/active-session/
+  POST            /api/auth/login/
+  POST            /api/auth/password-reset/
+  POST            /api/printing/scans/

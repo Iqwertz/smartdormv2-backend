@@ -1,11 +1,10 @@
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import LoggedIn, IsVerwaltung
 from ..models import Tenant, Subtenant, Room, Department
 from ..serializers import DepartmentSerializer
 
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsVerwaltung])
 def tenants_for_select_view(request):
     """
      API endpoint to retrieve a list of current tenants with minimal data 
@@ -81,7 +80,7 @@ def tenants_for_select_view(request):
         
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def departments_for_select_view(request):
     """
     API endpoint to retrieve a list of all departments for select dropdowns.
@@ -99,7 +98,7 @@ def departments_for_select_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsVerwaltung])
 def rooms_for_select_view(request):
     """
     API endpoint to retrieve a list of all rooms for select dropdowns.

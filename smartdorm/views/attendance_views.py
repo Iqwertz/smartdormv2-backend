@@ -1,6 +1,5 @@
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
@@ -8,20 +7,14 @@ from django.db.models import Count
 from datetime import timedelta
 import uuid
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import Groups, LoggedIn, CheckedInView, user_in_groups
 from ..models import Event, AttendanceSession, AttendanceRecord, Tenant, get_active_tenants, BaseAttendanceRecord
 from ..serializers import EventSerializer, AttendanceSessionSerializer, AttendanceRecordSerializer, BaseAttendanceRecordSerializer
 
 def _is_event_admin(request, event):
-    user_groups = [group.name for group in request.user.groups.all()]
-    if 'ADMIN' in user_groups:
-        return True
-    
-    # Check if user is in any of the configured admin_groups
-    admin_groups = event.admin_groups
-    if isinstance(admin_groups, list):
-        return any(group in user_groups for group in admin_groups)
-    return False
+    """Event admins are the groups stored on the event itself (ADMIN always passes)."""
+    admin_groups = event.admin_groups if isinstance(event.admin_groups, list) else []
+    return user_in_groups(request.user, admin_groups)
 
 
 def _build_attendance_code(session):
@@ -44,7 +37,7 @@ def _parse_attendance_code(code):
     return session_id, token
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_manageable_events_view(request):
     events = Event.objects.all().order_by('-created_at')
     manageable = [event for event in events if _is_event_admin(request, event)]
@@ -52,7 +45,7 @@ def list_manageable_events_view(request):
     return Response(serializer.data)
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_create_events_view(request):
     """
     GET: List all events.
@@ -66,8 +59,7 @@ def list_create_events_view(request):
         
     elif request.method == 'POST':
         # Check permissions for creating
-        user_groups = [group.name for group in request.user.groups.all()]
-        if not any(g in user_groups for g in ['ADMIN', 'Netzwerkreferat', 'Heimrat']):
+        if not user_in_groups(request.user, [Groups.NETZWERKREFERAT, Groups.HEIMRAT]):
             return Response({"error": "Insufficient permissions to create events."}, status=status.HTTP_403_FORBIDDEN)
             
         serializer = EventSerializer(data=request.data)
@@ -77,7 +69,7 @@ def list_create_events_view(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def detail_event_view(request, event_id):
     event = get_object_or_404(Event, id=event_id)
     
@@ -101,7 +93,7 @@ def detail_event_view(request, event_id):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_create_sessions_view(request, event_id):
     event = get_object_or_404(Event, id=event_id)
     
@@ -125,7 +117,7 @@ def list_create_sessions_view(request, event_id):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def toggle_session_status_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
@@ -151,7 +143,7 @@ def toggle_session_status_view(request, session_id):
     return Response(serializer.data)
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def delete_session_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
@@ -167,7 +159,7 @@ def delete_session_view(request, session_id):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def start_session_part_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
@@ -195,7 +187,7 @@ def start_session_part_view(request, session_id):
     return Response(serializer.data)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def stop_session_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
@@ -210,7 +202,7 @@ def stop_session_view(request, session_id):
     return Response(serializer.data)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def get_current_qr_token_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
@@ -235,7 +227,7 @@ def get_current_qr_token_view(request, session_id):
     })
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def scan_attendance_view(request):
     """
     Tenant endpoint to submit a scanned QR code.
@@ -292,7 +284,7 @@ def scan_attendance_view(request):
     )
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def attendance_report_view(request, session_id):
     """
     Returns an attendance matrix for a specific session.
@@ -346,7 +338,7 @@ def attendance_report_view(request, session_id):
     })
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def manual_override_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
@@ -374,7 +366,7 @@ def manual_override_view(request, session_id):
     return Response({"message": "Override applied successfully."})
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def my_attendance_history_view(request):
     """
     Returns attendance history for the logged-in tenant, including both regular and base attendance records.
@@ -428,7 +420,7 @@ def my_attendance_history_view(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def base_attendance_overview_view(request, event_id):
     """
     Returns a list of all active tenants with their attendance summary for a specific event.
@@ -482,7 +474,7 @@ def base_attendance_overview_view(request, event_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def tenant_attendance_detail_view(request, event_id, tenant_id):
     """
     Returns detailed attendance information for a specific tenant in a specific event.
@@ -548,7 +540,7 @@ def tenant_attendance_detail_view(request, event_id, tenant_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def add_or_update_base_attendance_view(request, event_id, tenant_id):
     """
     Create or update base attendance for a tenant in a specific event.

@@ -12,25 +12,20 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
 from ..models import LdapRoleAssignment
-from ..permissions import group_required
+from ..permissions import IsNetworkAdmin
 from ..serializers import LdapRoleAssignmentSerializer, LdapRoleAssignmentCreateSerializer
 from ..utils import ldap_utils
 
 logger = logging.getLogger(__name__)
 
-# Built as a permission class rather than declared via `required_groups`, which has no
-# effect on @api_view endpoints - see group_required() in permissions.py.
-IsNetworkAdmin = group_required("Netzwerkreferat", "ADMIN")
-
 
 @api_view(["GET"])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, IsNetworkAdmin])
+@permission_classes([IsNetworkAdmin])
 def list_ldap_role_assignments_view(request):
     """Lists all special role assignments, newest first."""
     assignments = LdapRoleAssignment.objects.all().order_by('-created_at')
@@ -39,7 +34,7 @@ def list_ldap_role_assignments_view(request):
 
 @api_view(["POST"])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, IsNetworkAdmin])
+@permission_classes([IsNetworkAdmin])
 def create_ldap_role_assignment_view(request):
     """
     Records a special role assignment and applies it in LDAP right away.
@@ -98,7 +93,7 @@ def create_ldap_role_assignment_view(request):
 
 @api_view(["DELETE"])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, IsNetworkAdmin])
+@permission_classes([IsNetworkAdmin])
 def delete_ldap_role_assignment_view(request, assignment_id):
     """
     Revokes a special role assignment: removes the group in LDAP, then drops the record.
@@ -127,7 +122,7 @@ def delete_ldap_role_assignment_view(request, assignment_id):
 
 @api_view(["GET"])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, IsNetworkAdmin])
+@permission_classes([IsNetworkAdmin])
 def list_ldap_groups_view(request):
     """Every group in the directory, for the role dropdown."""
     try:
@@ -139,7 +134,7 @@ def list_ldap_groups_view(request):
 
 @api_view(["GET"])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, IsNetworkAdmin])
+@permission_classes([IsNetworkAdmin])
 def list_ldap_users_view(request):
     """Every account in the directory, for the user picker."""
     try:

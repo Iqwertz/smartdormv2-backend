@@ -1,7 +1,6 @@
 from os import stat
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
@@ -15,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from dateutil.relativedelta import relativedelta
 import re
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import CheckedInView, IsVerwaltung, user_in_groups
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
 from ..utils import ldap_utils, email_utils, pdf_utils, credential_utils
@@ -32,13 +31,11 @@ DEPARTMENT_EMPLOYEE_TYPE = ['DEPARTMENT']
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def all_tenant_data_view(request):
     """
     API endpoint to retrieve tenant data, filterable by status (past, current, future).
     """
-    all_tenant_data_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    all_tenant_data_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
     # --- Filtering Logic ---
     status_filter = request.GET.get('status', 'current').lower()
     today = timezone.now().date()
@@ -79,23 +76,17 @@ def all_tenant_data_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def get_tenant_detail_view(request, tenant_id):
-    get_tenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    get_tenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     tenant = get_object_or_404(Tenant, id=tenant_id)
     serializer = TenantSerializer(tenant)
     return Response(serializer.data)
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_tenant_view(request, tenant_id):
-    update_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
     # Store old values to detect changes
@@ -142,15 +133,13 @@ def update_tenant_view(request, tenant_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def resend_tenant_credentials_view(request, tenant_id):
     """
     Mails the tenant a new password, as a welcome mail or a password reset mail
     (body: {"kind": "WELCOME" | "PASSWORD_RESET"}). The old password stays valid if the
     mail cannot be sent.
     """
-    resend_tenant_credentials_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    resend_tenant_credentials_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
     kind = request.data.get('kind')
@@ -172,12 +161,9 @@ def resend_tenant_credentials_view(request, tenant_id):
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def delete_tenant_view(request, tenant_id):
-    delete_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    delete_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     tenant = get_object_or_404(Tenant, id=tenant_id)
     username_to_delete = tenant.username
 
@@ -203,29 +189,23 @@ def delete_tenant_view(request, tenant_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_subtenants_for_tenant_view(request, tenant_id):
-    list_subtenants_for_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_subtenants_for_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     subtenants = Subtenant.objects.filter(tenant_id=tenant_id).order_by('-move_in')
     serializer = SubtenantSerializer(subtenants, many=True)
     return Response(serializer.data)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_tenant_rentals_view(request, tenant_id):
-    list_tenant_rentals_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_tenant_rentals_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     rentals = Rental.objects.filter(tenant_id=tenant_id).select_related('room').order_by('-move_in')
     serializer = RentalSerializer(rentals, many=True)
     return Response(serializer.data)
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def delete_rental_view(request, rental_id):
     """
@@ -235,8 +215,6 @@ def delete_rental_view(request, rental_id):
     - Updates LDAP floor groups if the floor changes.
     - Returns an error if deleting would leave the tenant with no rental records.
     """
-    delete_rental_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    delete_rental_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     rental = get_object_or_404(Rental.objects.select_related('room', 'tenant'), id=rental_id)
     tenant = rental.tenant
@@ -305,12 +283,9 @@ def delete_rental_view(request, rental_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def move_tenant_view(request, tenant_id):
-    move_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    move_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     serializer = TenantMoveSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -376,14 +351,12 @@ def move_tenant_view(request, tenant_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def create_new_tenant_view(request):
     """
     Handles the creation of a new tenant, including LDAP account and email notification.
     """
-    get_tenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    get_tenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     serializer = NewTenantSerializer(data=request.data)
     if not serializer.is_valid():
@@ -509,12 +482,9 @@ def create_new_tenant_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def create_subtenant_view(request):
-    create_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    create_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     serializer = NewSubtenantSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -613,11 +583,8 @@ def create_subtenant_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_subtenants_view(request):
-    list_subtenants_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_subtenants_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     status_filter = request.GET.get('status', 'current').lower()
     today = timezone.now().date()
     
@@ -646,11 +613,8 @@ def list_subtenants_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def get_subtenant_detail_view(request, subtenant_id):
-    get_subtenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    get_subtenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     serializer = SubtenantSerializer(subtenant)
     return Response(serializer.data)
@@ -658,12 +622,9 @@ def get_subtenant_detail_view(request, subtenant_id):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_subtenant_view(request, subtenant_id):
-    update_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     # Use NewSubtenantSerializer to validate the subset of editable fields
     serializer = NewSubtenantSerializer(data=request.data, partial=True)
@@ -736,12 +697,9 @@ def update_subtenant_view(request, subtenant_id):
     
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def delete_subtenant_view(request, subtenant_id):
-    delete_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    delete_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     # Hold on to the main tenant: their sublet total has to be recalculated after the
     # subtenant row is gone, and subtenant.tenant is no longer reachable by then.
@@ -803,7 +761,7 @@ DEPARTMENT_CONFIG = {
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_department_signatures_view(request, department_slug):
     """
     Lists departure signatures for a specific department.
@@ -815,9 +773,8 @@ def list_department_signatures_view(request, department_slug):
         return Response({"error": "Invalid department specified."}, status=status.HTTP_404_NOT_FOUND)
 
     config = DEPARTMENT_CONFIG[department_slug]
-    list_department_signatures_view.required_groups = [config["group"], 'ADMIN']
 
-    if not GroupAndEmployeeTypePermission().has_permission(request, list_department_signatures_view):
+    if not user_in_groups(request.user, [config["group"]]):
         return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
 
     signed_status = request.query_params.get('signed', 'false').lower() == 'true'
@@ -844,7 +801,7 @@ def list_department_signatures_view(request, department_slug):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 @transaction.atomic
 def update_department_signature_view(request, signature_id):
     """
@@ -858,9 +815,8 @@ def update_department_signature_view(request, signature_id):
         return Response({"error": "Signature belongs to an unknown department."}, status=status.HTTP_400_BAD_REQUEST)
 
     config = DEPARTMENT_CONFIG[department_slug]
-    update_department_signature_view.required_groups = [config["group"], 'ADMIN']
 
-    if not GroupAndEmployeeTypePermission().has_permission(request, update_department_signature_view):
+    if not user_in_groups(request.user, [config["group"]]):
         return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
 
     if signature.departure.status == 'CLOSED':
@@ -913,11 +869,8 @@ def update_department_signature_view(request, signature_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_departure_candidates_view(request):
-    list_departure_candidates_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_departure_candidates_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     today = timezone.now().date()
     eight_months_from_now = today + relativedelta(months=8)
 
@@ -934,12 +887,9 @@ def list_departure_candidates_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def create_departure_view(request):
-    create_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    create_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     tenant_id = request.data.get('tenant_id')
     if not tenant_id:
         return Response({"error": "Tenant ID is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -980,11 +930,8 @@ def create_departure_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_departures_view(request):
-    list_departures_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_departures_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     status_filter = request.query_params.get('status', '').upper()
     valid_statuses = [s.name for s in Departure.Status]
     if status_filter not in valid_statuses:
@@ -1003,11 +950,8 @@ def list_departures_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def send_departure_reminder_view(request, departure_id):
-    send_departure_reminder_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    send_departure_reminder_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     if departure.status != Departure.Status.CREATED:
         return Response({"error": "Can only send reminders for open departure requests."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1039,12 +983,9 @@ def send_departure_reminder_view(request, departure_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def revert_departure_view(request, departure_id):
-    revert_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    revert_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     
     tenant = departure.tenant
@@ -1057,12 +998,9 @@ def revert_departure_view(request, departure_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def close_departure_view(request, departure_id):
-    close_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    close_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     if departure.status != Departure.Status.CONFIRMED:
         return Response({"error": "Departure must be confirmed to be closed."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1106,14 +1044,12 @@ def close_departure_view(request, departure_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def download_departure_pdf_view(request, departure_id):
     """
     Generates and serves a PDF document for a closed departure,
     summarizing all departmental signatures and financial details.
     """
-    download_departure_pdf_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    download_departure_pdf_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     departure = get_object_or_404(
         Departure.objects.select_related('tenant'),
@@ -1139,11 +1075,8 @@ def download_departure_pdf_view(request, departure_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_claims_view(request):
-    list_claims_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_claims_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     status_filter = request.query_params.get('status', '').upper()
     
     if status_filter == 'COMPLETED':
@@ -1161,11 +1094,8 @@ def list_claims_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def send_claim_reminder_view(request, claim_id):
-    send_claim_reminder_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    send_claim_reminder_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
     if claim.status != Claim.Status.CREATED:
         return Response({"error": "Can only send reminders for open claims."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1194,12 +1124,9 @@ def send_claim_reminder_view(request, claim_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_claim_status_view(request, claim_id):
-    update_claim_status_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_claim_status_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     claim = get_object_or_404(Claim, id=claim_id)
     new_status = request.data.get('status', '').upper()
 
@@ -1213,12 +1140,9 @@ def update_claim_status_view(request, claim_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def process_claim_decision_view(request, claim_id):
-    process_claim_decision_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    process_claim_decision_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
     if claim.status != Claim.Status.PROCESSING:
         return Response({"error": "Claim is not in 'PROCESSING' state."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1292,15 +1216,13 @@ def process_claim_decision_view(request, claim_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def terminate_tenant_view(request, tenant_id):
     """
     Terminates a tenant's contract effective from a specified move_out_date.
     Creates a Termination record and updates the tenant's move_out date via recalculation.
     """
-    terminate_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    terminate_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     serializer = TenantTerminationSerializer(data=request.data)
     if not serializer.is_valid():
@@ -1364,15 +1286,13 @@ def terminate_tenant_view(request, tenant_id):
 
 @api_view(['GET', 'DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def manage_termination_view(request, tenant_id):
     """
     GET: Retrieve termination info for a tenant.
     DELETE: Remove a termination (revoking the firing), triggers recalculation.
     """
-    manage_termination_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    manage_termination_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
 
@@ -1403,15 +1323,13 @@ def manage_termination_view(request, tenant_id):
 
 @api_view(['GET', 'POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def manage_department_extensions_view(request, tenant_id=None):
     """
     GET: List all extensions for a specific tenant (requires tenant_id in URL).
     POST: Create a new extension.
     """
-    manage_department_extensions_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    manage_department_extensions_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     if request.method == 'GET':
         if not tenant_id:
@@ -1441,15 +1359,13 @@ def manage_department_extensions_view(request, tenant_id=None):
 
 @api_view(['DELETE', 'PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_department_extension_view(request, extension_id):
     """
     DELETE: Remove a specific extension.
     PUT: Update months/note.
     """
-    update_department_extension_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_department_extension_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     extension = get_object_or_404(DepartmentExtension, id=extension_id)
     tenant = extension.tenant
