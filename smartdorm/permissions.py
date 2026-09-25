@@ -17,7 +17,7 @@ Changing who may use a feature means editing the `groups` of its rule below. Add
 kind of access means adding a rule class here - never attaching requirements to the view
 function (`some_view.required_groups = [...]`): DRF never hands the function to permission
 classes, so such attributes are silently ignored. That mistake left most of the API open to
-every logged-in user until September 2026. See docs/authentication_permissions.md.
+every logged-in user until September 2026. See docs/permissions.md.
 """
 
 import logging
