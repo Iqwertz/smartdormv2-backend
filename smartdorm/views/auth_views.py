@@ -2,7 +2,8 @@ import json
 import secrets
 import string
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
-from django.http import JsonResponse
+from django.conf import settings
+from django.http import Http404, JsonResponse
 from django.views.decorators.http import require_POST
 from django.middleware.csrf import get_token
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -11,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from pprint import pprint
 from django.contrib.auth.models import User
+from ..dev_accounts import DEV_ACCOUNTS
 from ..models import Tenant
 from ..permissions import Public, LoggedIn
 from ..utils.email_utils import send_email_message
@@ -94,6 +96,18 @@ def me_view(request):
         return Response({"authenticated": True, "user": user_data}, status=status.HTTP_200_OK)
     else:
         return Response({"authenticated": False, "message": "User authenticated but data unavailable"}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([Public])
+@authentication_classes([SessionAuthentication])
+def dev_accounts_view(request):
+    """
+    The dev accounts for the login page's picker, only where SHOW_DEV_ACCOUNTS is set. Never
+    their password: the test system is reachable from the internet.
+    """
+    if not settings.SHOW_DEV_ACCOUNTS:
+        raise Http404
+    return Response([{"username": a.username, "description": a.description} for a in DEV_ACCOUNTS])
 
 @api_view(['POST'])
 @permission_classes([Public])

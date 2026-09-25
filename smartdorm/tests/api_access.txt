@@ -149,6 +149,7 @@ LoggedIn - any logged-in account
   POST            /api/tenants/printing/sessions/start/
 
 Public - anyone, no login
+  GET             /api/auth/dev-accounts/
   GET             /api/printing/active-session/
   POST            /api/auth/login/
   POST            /api/auth/password-reset/

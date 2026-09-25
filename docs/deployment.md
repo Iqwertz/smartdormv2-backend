@@ -249,6 +249,7 @@ In each GitLab project (**frontend and backend**), go to **Settings > CI/CD > Va
 -   `SERVER_USER`: `smartdorm`
 -   `SSH_PRIVATE_KEY`: Private SSH key for the GitLab runner to access the VM. (See below)
 -   `ENV_FILE_CONTENT`: The full content of the `.env` file for the target environment.
+    On `development` only, `export SHOW_DEV_ACCOUNTS=True` adds the test-account picker to the login page (see [Authentication & Permissions](./authentication_permissions.md#trying-it-out-dev-accounts)). Never set it for `production`.
 
 #### Frontend Variables:
 -   `SERVER_IP`: IP of the target frontend VM.

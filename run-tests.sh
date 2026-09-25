@@ -16,7 +16,7 @@ export PGPASSWORD="${DB_PASSWORD}"
 
 # Run the tests
 echo "Running access control tests (no database needed)..."
-python manage.py test smartdorm.tests.test_access || exit 1
+python manage.py test smartdorm.tests.test_access smartdorm.tests.test_dev_accounts || exit 1
 
 echo "Running Django tests..."
 python manage.py test smartdorm.tests.integration.test_api 

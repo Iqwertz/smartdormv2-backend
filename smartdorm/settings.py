@@ -8,6 +8,8 @@ SECRET_KEY = os.environ.get("SECRET_KEY")
 LOCAL_ENV = os.environ.get("LOCAL_ENV", "false").lower() in ("true", "1", "yes")
 PRODUCTION_MODE = os.environ.get("PRODUCTION", "false").lower() in ("true", "1", "yes")
 DEBUG = not PRODUCTION_MODE
+# Test system only: lists the dev accounts (see smartdorm/dev_accounts.py) on the login page.
+SHOW_DEV_ACCOUNTS = os.environ.get("SHOW_DEV_ACCOUNTS", "false").lower() in ("true", "1", "yes")
 
 ALLOWED_HOSTS = ['django', 'localhost', '127.0.0.1', '192.168.0.102', 'smartdormv2-api-dev.schollheim.net', 'api-smartdorm-v2.schollheim.net']
 

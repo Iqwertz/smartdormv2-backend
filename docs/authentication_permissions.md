@@ -53,6 +53,7 @@ without a declaration.
 | `smartdorm/management/commands/list_api_access.py` | `manage.py list_api_access`: who may call what |
 | `smartdorm/middleware.py` | `SubtenantApiGuardMiddleware` |
 | `smartdorm/tests/test_access.py`, `tests/api_access.txt` | access tests and the reviewed snapshot |
+| `smartdorm/dev_accounts.py`, `manage.py dev_accounts` | test accounts per role (test LDAP only) |
 
 ### The rules in short
 
@@ -188,6 +189,42 @@ It covers:
 
   Commit the snapshot with the change. Its diff shows the reviewer who gained or lost
   access to what, even when only a group list inside `permissions.py` changed.
+
+### Trying it out: dev accounts
+
+The test LDAP (`ldap-test.schollheim.net`) has one account per role, all with the same
+password. Logging in with one goes through the real path (LDAP bind, group mirroring,
+employeeType), so you see SmartDorm exactly as that role does:
+
+| Account | Role |
+|---|---|
+| `dev-bewohner` | resident without any role |
+| `dev-admin` | ADMIN (a resident account, like the real admins) |
+| `dev-verwaltung` | the Verwaltung account (`DEPARTMENT`) |
+| `dev-heimrat`, `dev-inforeferat`, `dev-netzwerkreferat`, ... | resident with one role each (one per group in `Groups`) |
+| `dev-barreferat` | resident in the Barreferat, for the signature pages |
+| `dev-untermieter` | subtenant |
+
+* **Creating or refreshing them:** `python manage.py dev_accounts`. It asks for the shared
+  password and resets every account to it, and it adds missing group memberships. Run it again
+  after adding a group to `Groups`, and the new role gets its account. `--delete` removes them.
+  The command refuses to run unless the LDAP and the database are known test systems
+  (`TEST_LDAP_HOSTS` / `TEST_DATABASE_HOSTS` in `smartdorm/dev_accounts.py`), or when
+  `PRODUCTION` is set. It also only touches accounts and tenant records whose mail is
+  `@smartdorm-dev.invalid`.
+* **Login page:** with `SHOW_DEV_ACCOUNTS=True` in the backend environment, the login page
+  shows a "Testkonto" dropdown that fills in the username. The password is never sent to the
+  browser, because the test system is reachable from the internet. Never set this flag on
+  production. The accounts don't exist in the production LDAP anyway.
+* **Dummy tenant records:** every resident account (all except `dev-verwaltung` and
+  `dev-untermieter`) gets a tenant record, so the resident pages have data to show. The
+  record is obviously fake: name `DEV-Testkonto <username>`, room `DEV-000`, floor `DEV`,
+  "Testdaten" everywhere else, and a mail at `@smartdorm-dev.invalid`. Verwaltung will see
+  these records in its lists. Rerunning the command resets them; `--delete` removes them,
+  along with anything created on them while testing.
+* **Limitation:** `dev-untermieter` has no subtenant record, because one would have to point
+  at a real room and a real main tenant. Its dashboard therefore has no data, but its access
+  checks can be tested.
 
 ### Troubleshooting a 403
 

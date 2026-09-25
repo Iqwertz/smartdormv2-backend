@@ -22,6 +22,7 @@ auth_urlpatterns = [
     path('me/', auth_views.me_view, name='api-me'),
     path('password-reset/', auth_views.password_reset_view, name='api-password-reset'),
     path('password-change/', auth_views.password_change_view, name='api-password-change'),
+    path('dev-accounts/', auth_views.dev_accounts_view, name='api-dev-accounts'),
 ]
 
 # Subtenant dashboard URLs (the subtenant's own account - not the Verwaltung's
