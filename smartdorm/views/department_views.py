@@ -989,8 +989,11 @@ def revert_departure_view(request, departure_id):
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     
     tenant = departure.tenant
-    
+
     DepositBank.objects.filter(tenant=tenant).delete()
+    # A POSTPONED departure has an open claim; without its departure it could no longer be rejected.
+    # Decided claims stay as history.
+    Claim.objects.filter(tenant=tenant, status__in=[Claim.Status.CREATED, Claim.Status.PROCESSING]).delete()
     departure.delete()
 
     return Response({"message": "Auszug erfolgreich abgebrochen."}, status=status.HTTP_200_OK)
