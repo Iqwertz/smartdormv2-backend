@@ -8,7 +8,6 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
@@ -30,7 +29,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from dateutil.relativedelta import relativedelta
 
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import LoggedIn
 from ..models import Tenant, Engagement, GlobalAppSettings, Departure, DepositBank, Claim, EngagementApplication
 from ..serializers import TenantSerializer, GlobalAppSettingsSerializer, DepartureSerializer, EngagementApplicationCreateSerializer, EngagementApplicationListSerializer, MyEngagementApplicationSerializer
 from ..utils.helper import create_and_notify_departure_signatures, get_next_semester
@@ -39,13 +38,12 @@ from .engagement_views import trigger_pdf_regeneration
 logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def profile_data_view(request):
     """
     Responds with the Tenant object associated with the currently logged-in user.
     """
-    profile_data_view.required_employee_types = ['TENANT']
 
     logged_in_username = request.user.username
 
@@ -53,13 +51,13 @@ def profile_data_view(request):
         tenant = Tenant.objects.get(username=logged_in_username)
     except Tenant.DoesNotExist:
         return Response(
-            {"error": "Tenant profile data not found for the logged-in user."},
+            {"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."},
             status=status.HTTP_404_NOT_FOUND
         )
     except Tenant.MultipleObjectsReturned:
         # Dont know if this ist possible/how we handle users with the same username. But added it now for safety
         return Response(
-             {"error": "Multiple tenant profiles found for the logged-in user. Please contact admin."},
+             {"error": "Zu deinem Konto gibt es mehrere Bewohner-Einträge. Melde dich beim Netzwerkreferat."},
              status=status.HTTP_500_INTERNAL_SERVER_ERROR
          )
     serializer = TenantSerializer(tenant)
@@ -68,7 +66,7 @@ def profile_data_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def calendar_proxy_view(request):
     """
     Fetches the ICS calendar file from the configured Nextcloud URL
@@ -80,7 +78,7 @@ def calendar_proxy_view(request):
     if not ics_url or ics_url == "YOUR_DEFAULT_NEXTCLOUD_ICS_LINK_HERE":
         logger.error("NEXTCLOUD_ICS_URL is not configured in settings.")
         # Return JSON error response
-        return JsonResponse({"error": "Calendar service is not configured."}, status=500)
+        return JsonResponse({"error": "Der Kalender ist nicht eingerichtet."}, status=500)
 
     try:
         response = requests.get(ics_url, timeout=10)
@@ -105,18 +103,18 @@ def calendar_proxy_view(request):
 
     except requests.exceptions.Timeout:
         logger.error(f"Timeout while fetching ICS from {ics_url}")
-        return JsonResponse({"error": "Could not reach calendar server (timeout)."}, status=504) # Gateway Timeout
+        return JsonResponse({"error": "Der Kalender antwortet gerade nicht."}, status=504) # Gateway Timeout
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching ICS from {ics_url}: {e}")
         status_code = response.status_code if 'response' in locals() and response else 502 # Bad Gateway
-        return JsonResponse({"error": "Failed to fetch calendar data from source."}, status=status_code)
+        return JsonResponse({"error": "Der Kalender konnte nicht geladen werden."}, status=status_code)
     except Exception as e:
         logger.exception(f"Unexpected error in calendar proxy view: {e}")
-        return JsonResponse({"error": "An unexpected server error occurred."}, status=500)
+        return JsonResponse({"error": "Da ist etwas schiefgelaufen. Versuch's nochmal."}, status=500)
     
     
 @api_view(['GET'])
-@permission_classes([IsAuthenticated]) # User must be logged in
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_engagements_view(request):
     """
@@ -139,20 +137,20 @@ def my_engagements_view(request):
     except Tenant.MultipleObjectsReturned:
         # This shouldn't happen with unique usernames, but handle defensively
         return Response(
-            {"error": "Multiple tenant profiles found for the logged-in user. Please contact admin."},
+            {"error": "Zu deinem Konto gibt es mehrere Bewohner-Einträge. Melde dich beim Netzwerkreferat."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     except Exception as e:
          # Catch other potential errors
         return Response(
-            {"error": f"An unexpected error occurred: {str(e)}"},
+            {"error": f"Da ist etwas schiefgelaufen: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def hsv_engagement_list_view(request):
     today = timezone.now().date()
     settings = GlobalAppSettings.load()
@@ -206,13 +204,13 @@ def hsv_engagement_list_view(request):
         import traceback
         traceback.print_exc()
         return Response(
-            {"error": "An error occurred while retrieving HSV data."},
+            {"error": "Die HSV-Übersicht konnte nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def get_global_settings_view(request):
     """
     API endpoint to retrieve all global application settings.
@@ -224,44 +222,40 @@ def get_global_settings_view(request):
     except Exception as e:
         logger.error(f"Error retrieving global settings: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving global settings."},
+            {"error": "Die Einstellungen konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_departure_view(request):
-    my_departure_view.required_employee_types = ['TENANT']
-    
     try:
         tenant = Tenant.objects.get(username=request.user.username)
         departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
         serializer = DepartureSerializer(departure)
         return Response(serializer.data, status=status.HTTP_200_OK)
     except (Tenant.DoesNotExist, Departure.DoesNotExist):
-        return Response({"detail": "No open departure request found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"detail": "Für dich läuft gerade kein Auszug."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"Error fetching departure for user {request.user.username}: {e}", exc_info=True)
-        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Da ist etwas schiefgelaufen. Versuch's nochmal."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 @transaction.atomic
 def decide_departure_view(request):
-    decide_departure_view.required_employee_types = ['TENANT']
-
     decision = request.data.get('decision', '').upper()
     if decision not in ['CONFIRM', 'POSTPONE']:
-        return Response({"error": "Invalid decision. Must be 'CONFIRM' or 'POSTPONE'."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Ungültige Entscheidung."}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         tenant = Tenant.objects.get(username=request.user.username)
         departure = Departure.objects.get(tenant=tenant, status=Departure.Status.CREATED)
     except (Tenant.DoesNotExist, Departure.DoesNotExist):
-        return Response({"error": "No open departure request found to decide on."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Für dich läuft gerade kein Auszug."}, status=status.HTTP_404_NOT_FOUND)
 
     if decision == 'POSTPONE':
         departure.status = Departure.Status.POSTPONED
@@ -315,13 +309,13 @@ def decide_departure_view(request):
             dynamic_pdf_filename=f"Antrag_Wohnzeitverlaengerung_{tenant.surname}.pdf"
         )
 
-        return Response({"message": "Departure successfully postponed."}, status=status.HTTP_200_OK)
+        return Response({"message": "Verlängerung beantragt. Die Verwaltung meldet sich bei dir."}, status=status.HTTP_200_OK)
 
     elif decision == 'CONFIRM':
         iban = request.data.get('iban')
         name = request.data.get('name')
         if not iban or not name:
-            return Response({"error": "IBAN and account holder name are required to confirm departure."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Gib Kontoinhaber und IBAN an."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Create or update bank details
         DepositBank.objects.update_or_create(
@@ -358,35 +352,33 @@ def decide_departure_view(request):
             }
         )
 
-        return Response({"message": "Departure successfully confirmed."}, status=status.HTTP_200_OK)
+        return Response({"message": "Auszug bestätigt."}, status=status.HTTP_200_OK)
 
-    return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response({"error": "Da ist etwas schiefgelaufen. Versuch's nochmal."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 @parser_classes([MultiPartParser, FormParser])
 def create_engagement_application_view(request):
-    create_engagement_application_view.required_employee_types = ['TENANT']
-
     settings = GlobalAppSettings.load()
     if not settings.applications_open:
-        return Response({"error": "Applications are currently closed."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Die Bewerbungsphase ist gerade geschlossen."}, status=status.HTTP_403_FORBIDDEN)
 
     try:
         tenant = Tenant.objects.get(username=request.user.username)
     except Tenant.DoesNotExist:
-        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."}, status=status.HTTP_404_NOT_FOUND)
 
     next_semester = get_next_semester(settings.current_semester)
     if not next_semester:
-        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Das Bewerbungssemester konnte nicht bestimmt werden. Sag dem Heimrat Bescheid."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # Check for existing application for the same department in the same semester
     department_id = request.data.get('department')
     if EngagementApplication.objects.filter(tenant=tenant, semester=next_semester, department_id=department_id).exists():
-        return Response({"error": f"You have already applied for this department for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
+        return Response({"error": f"Du hast dich für dieses Referat im {next_semester} schon beworben."}, status=status.HTTP_409_CONFLICT)
     
     data = request.data.copy()
     serializer = EngagementApplicationCreateSerializer(data=data)
@@ -413,13 +405,13 @@ def create_engagement_application_view(request):
         )
         # Trigger PDF regeneration for the affected semester
         trigger_pdf_regeneration(next_semester)
-        return Response({"message": "Application submitted successfully."}, status=status.HTTP_201_CREATED)
+        return Response({"message": "Bewerbung abgeschickt."}, status=status.HTTP_201_CREATED)
     except Exception as e:
         logger.error(f"Error creating engagement application for {tenant.username}: {e}", exc_info=True)
-        return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Die Bewerbung konnte nicht gespeichert werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def list_engagement_applications_view(request):
     settings = GlobalAppSettings.load()
@@ -428,7 +420,7 @@ def list_engagement_applications_view(request):
 
     next_semester = get_next_semester(settings.current_semester)
     if not next_semester:
-        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Das Bewerbungssemester konnte nicht bestimmt werden. Sag dem Heimrat Bescheid."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     applications_data = EngagementApplication.objects.filter(
         semester=next_semester
@@ -470,7 +462,7 @@ def list_engagement_applications_view(request):
     return Response(results)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def get_application_image_view(request, app_id):
     """
@@ -505,28 +497,24 @@ def get_application_image_view(request, app_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_engagement_applications_view(request):
-    my_engagement_applications_view.required_employee_types = ['TENANT']
-
     try:
         tenant = Tenant.objects.get(username=request.user.username)
         applications = EngagementApplication.objects.filter(tenant=tenant).order_by('-semester', 'department__name')
         serializer = MyEngagementApplicationSerializer(applications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Tenant.DoesNotExist:
-        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def delete_engagement_application_view(request, app_id):
-    delete_engagement_application_view.required_employee_types = ['TENANT']
-
     settings = GlobalAppSettings.load()
     if not settings.applications_open:
-        return Response({"error": "Applications are closed and cannot be modified."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Die Bewerbungsphase ist vorbei, Bewerbungen lassen sich nicht mehr ändern."}, status=status.HTTP_403_FORBIDDEN)
 
     try:
         tenant = Tenant.objects.get(username=request.user.username)
@@ -535,7 +523,7 @@ def delete_engagement_application_view(request, app_id):
         # To prevent deleting old applications, only allow deletion for the upcoming semester.
         next_semester = get_next_semester(settings.current_semester)
         if application.semester != next_semester:
-            return Response({"error": "You can only delete applications for the upcoming semester."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "Du kannst nur Bewerbungen fürs kommende Semester zurückziehen."}, status=status.HTTP_403_FORBIDDEN)
 
         application_semester = application.semester
         application.delete()
@@ -543,25 +531,24 @@ def delete_engagement_application_view(request, app_id):
         trigger_pdf_regeneration(application_semester)
         return Response(status=status.HTTP_204_NO_CONTENT)
     except Tenant.DoesNotExist:
-        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."}, status=status.HTTP_404_NOT_FOUND)
     except EngagementApplication.DoesNotExist:
-        return Response({"error": "Application not found or you do not have permission to delete it."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Diese Bewerbung gibt es nicht."}, status=status.HTTP_404_NOT_FOUND)
     
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def my_contract_calculation_view(request):
     """
     Returns a detailed breakdown of how the tenant's move_out date was calculated.
     """
-    my_contract_calculation_view.required_employee_types = ['TENANT']
     
     try:
         tenant = Tenant.objects.get(username=request.user.username)
         data = helper.get_contract_date_breakdown(tenant)
         return Response(data, status=status.HTTP_200_OK)
     except Tenant.DoesNotExist:
-        return Response({"error": "Tenant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Zu deinem Konto gibt es keinen Bewohner-Eintrag."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"Error calculating contract details for {request.user.username}: {e}", exc_info=True)
-        return Response({"error": "An internal error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Da ist etwas schiefgelaufen."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

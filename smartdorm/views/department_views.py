@@ -1,7 +1,6 @@
 from os import stat
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
@@ -15,11 +14,11 @@ from decimal import Decimal, InvalidOperation
 from dateutil.relativedelta import relativedelta
 import re
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import CheckedInView, IsVerwaltung, user_in_groups
 from ..models import Tenant, Subtenant, Rental, Room, DepartmentSignature, Departure, Claim, DepositBank,  Termination, DepartmentExtension
 from ..serializers import TenantSerializer, NewTenantSerializer, SubtenantSerializer, NewSubtenantSerializer, RentalSerializer, TenantMoveSerializer, TenantTerminationSerializer, DepartmentSignatureSerializer, DepartureSerializer, DepartureDetailSerializer, ClaimSerializer, TerminationSerializer, DepartmentExtensionSerializer, DepartmentExtensionCreateSerializer
-from ..utils import ldap_utils, email_utils, pdf_utils
-from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, SUBTENANT_EMPLOYEE_TYPE
+from ..utils import ldap_utils, email_utils, pdf_utils, credential_utils
+from ..utils.ldap_sync import floor_group_dn, sync_subtenant_floor_groups, apply_subtenant_floor_group, find_subtenant_account, subtenant_base_username, SUBTENANT_EMPLOYEE_TYPE
 from ..utils.helper import generate_secure_password, create_and_notify_departure_signatures, recalculate_tenant_contract_dates
 from .. import config as app_config
 
@@ -32,13 +31,11 @@ DEPARTMENT_EMPLOYEE_TYPE = ['DEPARTMENT']
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def all_tenant_data_view(request):
     """
     API endpoint to retrieve tenant data, filterable by status (past, current, future).
     """
-    all_tenant_data_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    all_tenant_data_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
     # --- Filtering Logic ---
     status_filter = request.GET.get('status', 'current').lower()
     today = timezone.now().date()
@@ -73,33 +70,26 @@ def all_tenant_data_view(request):
     except Exception as e:
         print(f"Error retrieving tenant data: {e}")
         return Response(
-            {"error": "An error occurred while retrieving tenant data."},
+            {"error": "Die Mieterdaten konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def get_tenant_detail_view(request, tenant_id):
-    get_tenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    get_tenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     tenant = get_object_or_404(Tenant, id=tenant_id)
     serializer = TenantSerializer(tenant)
     return Response(serializer.data)
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_tenant_view(request, tenant_id):
-    update_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
     # Store old values to detect changes
-    old_email = tenant.email
     old_name = tenant.name
     old_surname = tenant.surname
     
@@ -111,95 +101,111 @@ def update_tenant_view(request, tenant_id):
     if serializer.is_valid():
         serializer.save()
         
-        # Check if email, name, or surname changed and update LDAP
-        if tenant.username and (
-            tenant.email != old_email or 
-            tenant.name != old_name or 
-            tenant.surname != old_surname
-        ):
+        # Keep the LDAP account in step. The mail is compared against LDAP itself rather
+        # than the old DB value, so saving also repairs a mail that drifted earlier.
+        if tenant.username:
             try:
+                credential_utils.sync_ldap_email(tenant)
+
                 name_changed = tenant.name != old_name
                 surname_changed = tenant.surname != old_surname
-                
-                ldap_utils.update_ldap_user_attributes(
-                    username=tenant.username,
-                    email=tenant.email if tenant.email != old_email else None,
-                    first_name=tenant.name if name_changed else None,
-                    last_name=tenant.surname if surname_changed else None
-                )
-                logger.info(f"Successfully updated LDAP attributes for tenant '{tenant.username}'")
+                if name_changed or surname_changed:
+                    ldap_utils.update_ldap_user_attributes(
+                        username=tenant.username,
+                        first_name=tenant.name if name_changed else None,
+                        last_name=tenant.surname if surname_changed else None
+                    )
             except (ValueError, ConnectionError) as e:
                 logger.error(f"Failed to update LDAP for tenant '{tenant.username}': {e}", exc_info=True)
-                # Log warning but don't fail the entire operation - DB was successfully updated
+                # DB was saved - report the LDAP problem instead of failing the whole update
                 return Response(
                     {
-                        "message": "Tenant updated successfully, but LDAP sync failed. Manual synchronization may be needed.",
+                        "message": "Gespeichert, aber das Benutzerkonto konnte nicht angepasst werden. Sag dem Netzwerkreferat Bescheid.",
                         "data": serializer.data,
                         "ldap_error": str(e)
                     },
                     status=status.HTTP_200_OK
                 )
-        
+
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsVerwaltung])
+def resend_tenant_credentials_view(request, tenant_id):
+    """
+    Mails the tenant a new password, as a welcome mail or a password reset mail
+    (body: {"kind": "WELCOME" | "PASSWORD_RESET"}). The old password stays valid if the
+    mail cannot be sent.
+    """
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+    kind = request.data.get('kind')
+    if kind not in credential_utils.TEMPLATES:
+        return Response({"error": "Unbekannte E-Mail-Art."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        sent = credential_utils.resend_credentials(tenant, kind)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ConnectionError as e:
+        logger.error(f"LDAP error while resending credentials to '{tenant.username}': {e}", exc_info=True)
+        return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if not sent:
+        logger.warning(f"Resending credentials ({kind}) to '{tenant.username}' failed; old password kept.")
+    return Response({"email_sent": sent}, status=status.HTTP_200_OK)
+
+
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def delete_tenant_view(request, tenant_id):
-    delete_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    delete_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     tenant = get_object_or_404(Tenant, id=tenant_id)
     username_to_delete = tenant.username
 
     if not username_to_delete:
         # If there is no username, we can just delete the DB entry.
         tenant.delete()
-        return Response({"message": "Tenant DB record deleted (no associated username)."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Bewohner gelöscht (ohne Benutzerkonto)."}, status=status.HTTP_204_NO_CONTENT)
 
     # Proceed with LDAP and DB deletion
     try:
         ldap_utils.delete_ldap_user(username_to_delete)
         tenant.delete()
         logger.info(f"Successfully deleted tenant '{username_to_delete}' from DB and LDAP.")
-        return Response({"message": f"Tenant '{username_to_delete}' was successfully deleted."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": f"Bewohner „{username_to_delete}“ gelöscht."}, status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
         logger.error(f"Failed to delete tenant '{username_to_delete}': {e}", exc_info=True)
         # The transaction will be rolled back, so the DB entry is not deleted if LDAP fails.
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
         logger.error(f"An unexpected error occurred while deleting tenant '{username_to_delete}': {e}", exc_info=True)
-        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Da ist etwas schiefgelaufen. Versuch's nochmal."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_subtenants_for_tenant_view(request, tenant_id):
-    list_subtenants_for_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_subtenants_for_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     subtenants = Subtenant.objects.filter(tenant_id=tenant_id).order_by('-move_in')
     serializer = SubtenantSerializer(subtenants, many=True)
     return Response(serializer.data)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_tenant_rentals_view(request, tenant_id):
-    list_tenant_rentals_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_tenant_rentals_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     rentals = Rental.objects.filter(tenant_id=tenant_id).select_related('room').order_by('-move_in')
     serializer = RentalSerializer(rentals, many=True)
     return Response(serializer.data)
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def delete_rental_view(request, rental_id):
     """
@@ -209,8 +215,6 @@ def delete_rental_view(request, rental_id):
     - Updates LDAP floor groups if the floor changes.
     - Returns an error if deleting would leave the tenant with no rental records.
     """
-    delete_rental_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    delete_rental_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     rental = get_object_or_404(Rental.objects.select_related('room', 'tenant'), id=rental_id)
     tenant = rental.tenant
@@ -219,7 +223,7 @@ def delete_rental_view(request, rental_id):
     rental_count = Rental.objects.filter(tenant=tenant).count()
     if rental_count <= 1:
         return Response(
-            {"error": "Cannot delete this rental: the tenant must have at least one rental record."},
+            {"error": "Der letzte Zimmereintrag eines Bewohners kann nicht gelöscht werden."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -272,19 +276,16 @@ def delete_rental_view(request, rental_id):
         )
 
     return Response(
-        {"message": f"Rental deleted. Tenant's current room updated to '{tenant.current_room}'."},
+        {"message": f"Umzug rückgängig gemacht. Aktuelles Zimmer: {tenant.current_room}."},
         status=status.HTTP_200_OK
     )
 
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def move_tenant_view(request, tenant_id):
-    move_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    move_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     serializer = TenantMoveSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -299,10 +300,10 @@ def move_tenant_view(request, tenant_id):
     # Find the current rental agreement to end it
     current_rental = Rental.objects.filter(tenant=tenant).order_by('-move_in').first()
     if not current_rental:
-        return Response({"error": "No current rental found for this tenant."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Für diesen Bewohner ist kein Zimmer eingetragen."}, status=status.HTTP_404_NOT_FOUND)
 
     if move_date <= current_rental.move_in:
-        return Response({"error": "Move date must be after the current move-in date."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Das Umzugsdatum muss nach dem Einzug ins aktuelle Zimmer liegen."}, status=status.HTTP_400_BAD_REQUEST)
         
     # End the current rental one day before the new move
     current_rental.moved_out = move_date - timedelta(days=1)
@@ -350,14 +351,12 @@ def move_tenant_view(request, tenant_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def create_new_tenant_view(request):
     """
     Handles the creation of a new tenant, including LDAP account and email notification.
     """
-    get_tenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    get_tenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     serializer = NewTenantSerializer(data=request.data)
     if not serializer.is_valid():
@@ -449,7 +448,7 @@ def create_new_tenant_view(request):
         except Exception as ldap_e:
             logger.error(f"Failed to revert LDAP creation for user '{username}'. Manual cleanup required. Error: {ldap_e}", exc_info=True)
         
-        return Response({"error": "Authentication entry was created, but failed to save tenant to database. Please contact support."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Der Bewohner konnte nicht gespeichert werden. Sag dem Netzwerkreferat Bescheid."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # 4. Send notification email to the new tenant
     email_context = {
@@ -467,12 +466,14 @@ def create_new_tenant_view(request):
     if not email_sent:
         logger.warning(f"Tenant '{username}' created, but the welcome email to {data['email']} failed to send.")
         return Response(
-            {"message": "Tenant created successfully, but the notification email could not be sent."},
+            {"message": "Bewohner angelegt, aber die Mail mit den Zugangsdaten ging nicht raus. Du kannst sie später erneut senden.",
+             "username": username, "email_sent": False},
             status=status.HTTP_201_CREATED
         )
 
     return Response(
-        {"message": f"Tenant '{username}' created successfully and notification sent.", "username": username},
+        {"message": f"Bewohner „{username}“ angelegt, die Zugangsdaten sind per Mail unterwegs.",
+         "username": username, "email_sent": True},
         status=status.HTTP_201_CREATED
     )
     
@@ -481,12 +482,9 @@ def create_new_tenant_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def create_subtenant_view(request):
-    create_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    create_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     serializer = NewSubtenantSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -497,74 +495,19 @@ def create_subtenant_view(request):
     main_tenant = get_object_or_404(Tenant, id=data['tenant_id'])
     subtenant_floor_group_dn = floor_group_dn(main_tenant.current_floor)
 
-    base_username = (data['name'] + " " + data['surname']).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss') # subtenant username format is diffrent from tenant to avoid conflicts
-    username = base_username
-    counter = 1
-    #Log all Tenants with the same username, so we can increment it if needed
-    logger.info(f"Creating subtenant with base username: {base_username}")
-    
-    while Tenant.objects.filter(username=username).exists():
-        logger.info(f"Username {username} already exists, trying next increment.")
-        username = f"{base_username}{counter}"
-        counter += 1
-        
-    
-    password = generate_secure_password()
-    
-    #Determin if there was already a subtenant with the same username and skip ldap user creation if so
-    is_new_subtenant = not Subtenant.objects.filter(name=data['name'], surname=data['surname']).exists()
-         
-    if is_new_subtenant:
-        try:
-            # Copy, never mutate the config constant
-            ldap_groups = list(app_config.DEFAULT_SUBTENANT_LDAP_GROUPS)
-            if subtenant_floor_group_dn:
-                ldap_groups.append(subtenant_floor_group_dn)
+    ldap_groups = list(app_config.DEFAULT_SUBTENANT_LDAP_GROUPS)  # copy, never mutate the config constant
+    if subtenant_floor_group_dn:
+        ldap_groups.append(subtenant_floor_group_dn)
 
-            ldap_utils.create_ldap_user(
-                username=username, password=password, first_name=data['name'],
-                last_name=data['surname'], email=data['email'],
-                group_dns=ldap_groups,
-                userType="SUBTENANT"
-            )
-        except (ValueError, ConnectionError) as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    else:
-        # Returning subtenant: the LDAP account already exists, but it may sit on the
-        # wrong floor (or none at all) from a previous sublet. Look the account up by
-        # email, since the username generated above ignores any numeric suffix that was
-        # appended when it was originally created. Restricted to SUBTENANT accounts -
-        # a returning subtenant's email often also belongs to a tenant account.
-        try:
-            existing_username, _ = ldap_utils.find_ldap_user_by_email(
-                data['email'], employee_type=SUBTENANT_EMPLOYEE_TYPE
-            )
-            if not existing_username:
-                logger.warning(
-                    f"No subtenant LDAP account found for returning subtenant '{data['email']}'. "
-                    f"Floor group could not be assigned."
-                )
-            elif Tenant.objects.filter(username=existing_username).exists():
-                logger.warning(
-                    f"LDAP account '{existing_username}' for subtenant '{data['email']}' belongs "
-                    f"to a main tenant. Skipping group assignment."
-                )
-            else:
-                for group_dn in app_config.DEFAULT_SUBTENANT_LDAP_GROUPS:
-                    ldap_utils.add_user_to_group(existing_username, group_dn)
-                if subtenant_floor_group_dn:
-                    ldap_utils.add_user_to_group(existing_username, subtenant_floor_group_dn)
-                    logger.info(
-                        f"Added returning subtenant '{existing_username}' to LDAP group for "
-                        f"floor '{main_tenant.current_floor}'."
-                    )
-        except Exception as e:
-            # Never fail the request over a group assignment - the nightly sync heals it.
-            logger.error(
-                f"Error assigning LDAP groups to returning subtenant '{data['email']}': {e}",
-                exc_info=True
-            )
+    # 1. New or returning subtenant? Decided by the LDAP account, not by earlier Subtenant
+    # rows: a row can outlive its account (deleted, never created) and the other way round.
+    try:
+        existing_username = find_subtenant_account(data['email'], data['name'], data['surname'])
+    except ConnectionError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    # 2. Save the subtenant first. The LDAP writes below cannot be rolled back, so they
+    # run last and roll this row back if they fail.
     try:
         max_id_result = Subtenant.objects.aggregate(max_id=Max('id'))
         new_id = (max_id_result['max_id'] or 0) + 1
@@ -576,37 +519,72 @@ def create_subtenant_view(request):
             tenant_id=data['tenant_id'], room_id=data['room_id'],
             university_confirmation=data['university_confirmation']
         )
-        
+
         # Update the main tenant's sublet count and adjust dates
         recalculate_tenant_contract_dates(subtenant.tenant)
-            
+
     except Exception as e:
-        logger.error(f"DB Error for new subtenant '{username}': {e}. Manual LDAP cleanup may be needed.", exc_info=True)
-        return Response({"error": "Failed to save subtenant to database after creating auth entry."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        transaction.set_rollback(True)
+        logger.error(f"DB Error for new subtenant '{data['email']}': {e}", exc_info=True)
+        return Response({"error": "Der Untermieter konnte nicht gespeichert werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    if is_new_subtenant:
-        email_context = {
-            'greeting': f"Hallo {data['name']}",
-            'username': username, 'password': password,
-        }
-        email_sent = email_utils.send_email_message(
-            recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
-            html_template_name='email/user-account-creation-subtenant.html',
-            context=email_context
-        )
-        if not email_sent:
-            logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+    # 3. Create the account, or give the existing one a fresh password. Either way the
+    # subtenant gets their credentials mailed, so re-adding a subtenant resends them.
+    password = generate_secure_password()
+    try:
+        if existing_username:
+            username = existing_username
+            logger.info(f"Returning subtenant '{data['email']}': resetting password of LDAP account '{username}'.")
+            ldap_utils.update_ldap_password(username, password)
+            # Accounts from before employeeType was stamped carry TENANT - mark them, so
+            # the nightly sync and the subtenant access guard recognise them from now on.
+            ldap_utils.update_ldap_user_attributes(username, employee_type=SUBTENANT_EMPLOYEE_TYPE)
+            for group_dn in ldap_groups:
+                ldap_utils.add_user_to_group(username, group_dn)
+        else:
+            base_username = subtenant_base_username(data['name'], data['surname'])
+            username = base_username
+            counter = 1
+            while ldap_utils.ldap_username_exists(username) or Tenant.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+            logger.info(f"Creating LDAP account '{username}' for new subtenant '{data['email']}'.")
 
-    return Response(SubtenantSerializer(subtenant).data, status=status.HTTP_201_CREATED)
+            ldap_utils.create_ldap_user(
+                username=username, password=password, first_name=data['name'],
+                last_name=data['surname'], email=data['email'],
+                group_dns=ldap_groups,
+                userType=SUBTENANT_EMPLOYEE_TYPE
+            )
+    except (ValueError, ConnectionError) as e:
+        transaction.set_rollback(True)
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 4. Mail the credentials
+    email_context = {
+        'greeting': data['name'],
+        'username': username, 'password': password,
+        'account_reused': bool(existing_username),
+    }
+    email_sent = email_utils.send_email_message(
+        recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
+        html_template_name='email/user-account-creation-subtenant.html',
+        context=email_context
+    )
+    if not email_sent:
+        logger.warning(f"Subtenant '{username}' created, but the welcome email failed to send.")
+
+    response_data = SubtenantSerializer(subtenant).data
+    response_data['username'] = username
+    response_data['account_reused'] = bool(existing_username)
+    response_data['email_sent'] = email_sent
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_subtenants_view(request):
-    list_subtenants_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_subtenants_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     status_filter = request.GET.get('status', 'current').lower()
     today = timezone.now().date()
     
@@ -635,11 +613,8 @@ def list_subtenants_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def get_subtenant_detail_view(request, subtenant_id):
-    get_subtenant_detail_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    get_subtenant_detail_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     serializer = SubtenantSerializer(subtenant)
     return Response(serializer.data)
@@ -647,11 +622,9 @@ def get_subtenant_detail_view(request, subtenant_id):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
+@transaction.atomic
 def update_subtenant_view(request, subtenant_id):
-    update_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     # Use NewSubtenantSerializer to validate the subset of editable fields
     serializer = NewSubtenantSerializer(data=request.data, partial=True)
@@ -659,9 +632,49 @@ def update_subtenant_view(request, subtenant_id):
         data = serializer.validated_data
         # Reassigning the subtenant to a different main tenant also moves their floor
         old_floor = subtenant.tenant.current_floor
+        old_email, old_name, old_surname = subtenant.email, subtenant.name, subtenant.surname
+
+        # The email is the only link between a subtenant and their LDAP account, so the
+        # account has to be resolved with the old values - before they are overwritten.
+        identity_changed = (
+            data.get('email', old_email) != old_email
+            or data.get('name', old_name) != old_name
+            or data.get('surname', old_surname) != old_surname
+        )
+        account_username = None
+        if identity_changed:
+            try:
+                account_username = find_subtenant_account(old_email, old_name, old_surname)
+            except ConnectionError as e:
+                return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
         for key, value in data.items():
             setattr(subtenant, key, value)
         subtenant.save()
+
+        ldap_warning = None
+        if identity_changed and account_username:
+            email_changed = subtenant.email != old_email
+            name_changed = subtenant.name != old_name
+            surname_changed = subtenant.surname != old_surname
+            try:
+                ldap_utils.update_ldap_user_attributes(
+                    username=account_username,
+                    email=subtenant.email if email_changed else None,
+                    first_name=subtenant.name if name_changed else None,
+                    last_name=subtenant.surname if surname_changed else None,
+                )
+            except (ValueError, ConnectionError) as e:
+                # Saving the row anyway would cut the link to the account for good
+                transaction.set_rollback(True)
+                logger.error(f"Failed to update LDAP for subtenant '{old_email}': {e}", exc_info=True)
+                return Response(
+                    {"error": f"Das Benutzerkonto konnte nicht angepasst werden, nichts wurde gespeichert ({e})."},
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
+        elif identity_changed:
+            ldap_warning = "Kein Benutzerkonto für diesen Untermieter gefunden, nur SmartDorm wurde aktualisiert."
+            logger.warning(f"Subtenant '{old_email}' updated, but no LDAP account was found to update.")
 
         new_tenant = Tenant.objects.filter(id=subtenant.tenant_id).first()
         new_floor = new_tenant.current_floor if new_tenant else None
@@ -676,39 +689,50 @@ def update_subtenant_view(request, subtenant_id):
 
         recalculate_tenant_contract_dates(subtenant.tenant)
 
-        return Response(SubtenantSerializer(subtenant).data)
+        response_data = SubtenantSerializer(subtenant).data
+        if ldap_warning:
+            response_data['ldap_warning'] = ldap_warning
+        return Response(response_data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def delete_subtenant_view(request, subtenant_id):
-    delete_subtenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    delete_subtenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-    
     subtenant = get_object_or_404(Subtenant, id=subtenant_id)
     # Hold on to the main tenant: their sublet total has to be recalculated after the
     # subtenant row is gone, and subtenant.tenant is no longer reachable by then.
     main_tenant = subtenant.tenant
-    #Reconstruct the username to delete, not the cleanest way since it assumes that the username isnt incremented when creating subtenants, however with the low amount of subtenants it is very unlikely to happen.
-    username_to_delete = (subtenant.name + " " + subtenant.surname).lower().replace(' ', '').replace('ä','ae').replace('ö','oe').replace('ü','ue').replace('ß','ss'
-                                                                                                                                                        )
-    if not username_to_delete:
-        subtenant.delete()
-        recalculate_tenant_contract_dates(main_tenant)
+    email, name, surname = subtenant.email, subtenant.name, subtenant.surname
+
+    # The LDAP account belongs to the person, not to one sublet: repeat sublets share it,
+    # so it is only deleted together with the last row for this email.
+    other_rows_exist = bool(email) and Subtenant.objects.filter(
+        email__iexact=email.strip()
+    ).exclude(id=subtenant.id).exists()
+
+    subtenant.delete()
+    recalculate_tenant_contract_dates(main_tenant)
+
+    if other_rows_exist:
+        logger.info(f"Deleted subtenant row {subtenant_id}; kept the LDAP account of '{email}', other sublets still use it.")
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    # LDAP last: it cannot be rolled back, the row deletion above can
     try:
-        ldap_utils.delete_ldap_user(username_to_delete)
-        subtenant.delete()
-        recalculate_tenant_contract_dates(main_tenant)
-        logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
+        username_to_delete = find_subtenant_account(email, name, surname)
+        if username_to_delete:
+            ldap_utils.delete_ldap_user(username_to_delete)
+            logger.info(f"Successfully deleted subtenant '{username_to_delete}' from DB and LDAP.")
+        else:
+            logger.warning(f"Deleted subtenant row {subtenant_id}, but no subtenant LDAP account was found for '{email}'.")
         return Response(status=status.HTTP_204_NO_CONTENT)
     except ConnectionError as e:
-        logger.error(f"Failed to delete subtenant '{username_to_delete}': {e}", exc_info=True)
+        transaction.set_rollback(True)
+        logger.error(f"Failed to delete subtenant '{email}': {e}", exc_info=True)
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
 # --- Department Signature Views ---
 DEPARTMENT_CONFIG = {
     "tutoren": {"name": "TUTOREN", "group": "Tutoren"},
@@ -737,7 +761,7 @@ DEPARTMENT_CONFIG = {
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_department_signatures_view(request, department_slug):
     """
     Lists departure signatures for a specific department.
@@ -746,13 +770,12 @@ def list_department_signatures_view(request, department_slug):
     - `?signed=true`: Shows all signed signatures.
     """
     if department_slug not in DEPARTMENT_CONFIG:
-        return Response({"error": "Invalid department specified."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Dieses Referat gibt es nicht."}, status=status.HTTP_404_NOT_FOUND)
 
     config = DEPARTMENT_CONFIG[department_slug]
-    list_department_signatures_view.required_groups = [config["group"], 'ADMIN']
 
-    if not GroupAndEmployeeTypePermission().has_permission(request, list_department_signatures_view):
-        return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+    if not user_in_groups(request.user, [config["group"]]):
+        return Response({"detail": "Dafür fehlen dir die Rechte."}, status=status.HTTP_403_FORBIDDEN)
 
     signed_status = request.query_params.get('signed', 'false').lower() == 'true'
     SENTINEL_DATE = date(1900, 1, 1)
@@ -778,7 +801,7 @@ def list_department_signatures_view(request, department_slug):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 @transaction.atomic
 def update_department_signature_view(request, signature_id):
     """
@@ -789,25 +812,24 @@ def update_department_signature_view(request, signature_id):
     department_slug = next((slug for slug, conf in DEPARTMENT_CONFIG.items() if conf["name"] == signature.department_name), None)
     
     if not department_slug:
-        return Response({"error": "Signature belongs to an unknown department."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Diese Unterschrift gehört zu keinem bekannten Referat."}, status=status.HTTP_400_BAD_REQUEST)
 
     config = DEPARTMENT_CONFIG[department_slug]
-    update_department_signature_view.required_groups = [config["group"], 'ADMIN']
 
-    if not GroupAndEmployeeTypePermission().has_permission(request, update_department_signature_view):
-        return Response({"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN)
+    if not user_in_groups(request.user, [config["group"]]):
+        return Response({"detail": "Dafür fehlen dir die Rechte."}, status=status.HTTP_403_FORBIDDEN)
 
     if signature.departure.status == 'CLOSED':
-        return Response({"error": "Cannot update signature for a closed departure."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Der Auszug ist schon abgeschlossen, die Unterschrift lässt sich nicht mehr ändern."}, status=status.HTTP_403_FORBIDDEN)
 
     amount_str = request.data.get('amount')
     if amount_str is None:
-        return Response({"error": "Amount is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Gib einen Betrag an (0, wenn nichts offen ist)."}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
         signature.amount = Decimal(amount_str)
     except (TypeError, InvalidOperation):
-        return Response({"error": "Invalid amount format."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der Betrag ist keine gültige Zahl."}, status=status.HTTP_400_BAD_REQUEST)
 
     # If the signature has the sentinel date, update it to today's date to "sign" it.
     SENTINEL_DATE = date(1900, 1, 1)
@@ -847,11 +869,8 @@ def update_department_signature_view(request, signature_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_departure_candidates_view(request):
-    list_departure_candidates_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_departure_candidates_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     today = timezone.now().date()
     eight_months_from_now = today + relativedelta(months=8)
 
@@ -868,19 +887,16 @@ def list_departure_candidates_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def create_departure_view(request):
-    create_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    create_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     tenant_id = request.data.get('tenant_id')
     if not tenant_id:
-        return Response({"error": "Tenant ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Wähl einen Bewohner aus."}, status=status.HTTP_400_BAD_REQUEST)
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
     if Departure.objects.filter(tenant=tenant).exists():
-        return Response({"error": "Departure request for this tenant already exists."}, status=status.HTTP_409_CONFLICT)
+        return Response({"error": "Für diesen Bewohner läuft schon ein Auszug."}, status=status.HTTP_409_CONFLICT)
 
     departure = Departure.objects.create(
         tenant=tenant,
@@ -914,15 +930,12 @@ def create_departure_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_departures_view(request):
-    list_departures_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_departures_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     status_filter = request.query_params.get('status', '').upper()
     valid_statuses = [s.name for s in Departure.Status]
     if status_filter not in valid_statuses:
-        return Response({"error": f"Invalid status. Valid options are: {', '.join(valid_statuses)}"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": f"Ungültiger Status. Möglich: {', '.join(valid_statuses)}"}, status=status.HTTP_400_BAD_REQUEST)
 
     departures = Departure.objects.filter(status=status_filter).select_related('tenant')
 
@@ -937,14 +950,11 @@ def list_departures_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def send_departure_reminder_view(request, departure_id):
-    send_departure_reminder_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    send_departure_reminder_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     if departure.status != Departure.Status.CREATED:
-        return Response({"error": "Can only send reminders for open departure requests."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Erinnerungen gehen nur bei offenen Auszügen."}, status=status.HTTP_400_BAD_REQUEST)
 
     pdf_data = {
         'Bewohnername': departure.tenant.name + " " + departure.tenant.surname,
@@ -967,23 +977,23 @@ def send_departure_reminder_view(request, departure_id):
     )
 
     if email_sent:
-        return Response({"message": "Reminder email sent successfully."}, status=status.HTTP_200_OK)
+        return Response({"message": "Erinnerung verschickt."}, status=status.HTTP_200_OK)
     else:
-        return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Die Erinnerung konnte nicht verschickt werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def revert_departure_view(request, departure_id):
-    revert_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    revert_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     
     tenant = departure.tenant
-    
+
     DepositBank.objects.filter(tenant=tenant).delete()
+    # A POSTPONED departure has an open claim; without its departure it could no longer be rejected.
+    # Decided claims stay as history.
+    Claim.objects.filter(tenant=tenant, status__in=[Claim.Status.CREATED, Claim.Status.PROCESSING]).delete()
     departure.delete()
 
     return Response({"message": "Auszug erfolgreich abgebrochen."}, status=status.HTTP_200_OK)
@@ -991,15 +1001,12 @@ def revert_departure_view(request, departure_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def close_departure_view(request, departure_id):
-    close_departure_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    close_departure_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     departure = get_object_or_404(Departure.objects.select_related('tenant'), tenant_id=departure_id)
     if departure.status != Departure.Status.CONFIRMED:
-        return Response({"error": "Departure must be confirmed to be closed."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Nur bestätigte Auszüge können abgeschlossen werden."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Check if all signatures are done
     SENTINEL_DATE = date(1900, 1, 1)
@@ -1009,7 +1016,7 @@ def close_departure_view(request, departure_id):
     ).count()
 
     if unsigned_count > 0:
-        return Response({"error": f"{unsigned_count} department signature(s) are still missing."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": f"Es fehlen noch {unsigned_count} Unterschrift(en)."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Update tenant's move_out date if provided
     new_move_out_date_str = request.data.get('move_out_date')
@@ -1020,7 +1027,7 @@ def close_departure_view(request, departure_id):
             tenant.move_out = new_move_out_date
             tenant.save()
         except (ValueError, TypeError):
-            return Response({"error": "Invalid date format for move_out_date. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Ungültiges Auszugsdatum."}, status=status.HTTP_400_BAD_REQUEST)
 
     departure.status = Departure.Status.CLOSED
     departure.save()
@@ -1036,18 +1043,16 @@ def close_departure_view(request, departure_id):
         }
     )
 
-    return Response({"message": "Departure successfully closed."}, status=status.HTTP_200_OK)
+    return Response({"message": "Auszug abgeschlossen."}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def download_departure_pdf_view(request, departure_id):
     """
     Generates and serves a PDF document for a closed departure,
     summarizing all departmental signatures and financial details.
     """
-    download_departure_pdf_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    download_departure_pdf_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     departure = get_object_or_404(
         Departure.objects.select_related('tenant'),
@@ -1057,7 +1062,7 @@ def download_departure_pdf_view(request, departure_id):
     # Ensure the PDF can only be generated for departures that are fully processed
     if departure.status != Departure.Status.CLOSED:
         return Response(
-            {"error": "PDF can only be generated for closed departures."},
+            {"error": "Das PDF gibt es erst, wenn der Auszug abgeschlossen ist."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -1073,11 +1078,8 @@ def download_departure_pdf_view(request, departure_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_claims_view(request):
-    list_claims_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    list_claims_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     status_filter = request.query_params.get('status', '').upper()
     
     if status_filter == 'COMPLETED':
@@ -1087,7 +1089,7 @@ def list_claims_view(request):
     else:
         valid_statuses = [s.name for s in Claim.Status]
         if status_filter not in valid_statuses:
-            return Response({"error": f"Invalid status. Valid options are: {', '.join(valid_statuses)} or COMPLETED"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": f"Ungültiger Status. Möglich: {', '.join(valid_statuses)} oder COMPLETED"}, status=status.HTTP_400_BAD_REQUEST)
         queryset = Claim.objects.filter(status=status_filter).select_related('tenant').order_by('created_on')
 
     serializer = ClaimSerializer(queryset, many=True)
@@ -1095,14 +1097,11 @@ def list_claims_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def send_claim_reminder_view(request, claim_id):
-    send_claim_reminder_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    send_claim_reminder_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
     if claim.status != Claim.Status.CREATED:
-        return Response({"error": "Can only send reminders for open claims."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Erinnerungen gehen nur bei offenen Anträgen."}, status=status.HTTP_400_BAD_REQUEST)
 
     tenant = claim.tenant
 
@@ -1123,17 +1122,14 @@ def send_claim_reminder_view(request, claim_id):
     )
 
     if email_sent:
-        return Response({"message": "Reminder email with application form sent successfully."}, status=status.HTTP_200_OK)
-    return Response({"error": "Failed to send reminder email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"message": "Erinnerung mit Antragsformular verschickt."}, status=status.HTTP_200_OK)
+    return Response({"error": "Die Erinnerung konnte nicht verschickt werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_claim_status_view(request, claim_id):
-    update_claim_status_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_claim_status_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     claim = get_object_or_404(Claim, id=claim_id)
     new_status = request.data.get('status', '').upper()
 
@@ -1143,19 +1139,16 @@ def update_claim_status_view(request, claim_id):
         serializer = ClaimSerializer(claim)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
-    return Response({"error": f"Invalid status transition from {claim.status} to {new_status}."}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({"error": f"Der Antrag kann nicht von {claim.status} zu {new_status} wechseln."}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def process_claim_decision_view(request, claim_id):
-    process_claim_decision_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    process_claim_decision_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
-
     claim = get_object_or_404(Claim.objects.select_related('tenant'), id=claim_id)
     if claim.status != Claim.Status.PROCESSING:
-        return Response({"error": "Claim is not in 'PROCESSING' state."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der Antrag ist nicht in Bearbeitung."}, status=status.HTTP_400_BAD_REQUEST)
 
     decision = request.data.get('decision', '').upper()
     tenant = claim.tenant
@@ -1184,7 +1177,7 @@ def process_claim_decision_view(request, claim_id):
             }
         )
         
-        return Response({"message": "Claim rejected and departure confirmed."}, status=status.HTTP_200_OK)
+        return Response({"message": "Antrag abgelehnt, der Auszug läuft weiter."}, status=status.HTTP_200_OK)
 
     elif decision == 'APPROVED':
         claim.status = Claim.Status.APPROVED
@@ -1199,7 +1192,7 @@ def process_claim_decision_view(request, claim_id):
                 tenant.move_out = date.fromisoformat(new_move_out_date_str)
                 tenant.save()
             except (ValueError, TypeError):
-                return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Ungültiges Datum."}, status=status.HTTP_400_BAD_REQUEST)
         else:
             recalculate_tenant_contract_dates(tenant)
 
@@ -1216,9 +1209,9 @@ def process_claim_decision_view(request, claim_id):
             }
         )
         
-        return Response({"message": "Claim approved, tenant extended, and departure deleted."}, status=status.HTTP_200_OK)
+        return Response({"message": "Antrag genehmigt, die Wohnzeit ist verlängert."}, status=status.HTTP_200_OK)
 
-    return Response({"error": "Invalid decision. Must be 'APPROVED' or 'REJECTED'."}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({"error": "Ungültige Entscheidung."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 
@@ -1226,15 +1219,13 @@ def process_claim_decision_view(request, claim_id):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def terminate_tenant_view(request, tenant_id):
     """
     Terminates a tenant's contract effective from a specified move_out_date.
     Creates a Termination record and updates the tenant's move_out date via recalculation.
     """
-    terminate_tenant_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    terminate_tenant_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     serializer = TenantTerminationSerializer(data=request.data)
     if not serializer.is_valid():
@@ -1292,21 +1283,19 @@ def terminate_tenant_view(request, tenant_id):
     logger.info(f"Claims updated to REJECTED for tenant {tenant.username}: {claims_updated}")
     
     return Response(
-        {"message": f"Tenant {tenant.username}'s contract has been terminated. Departure process initiated."},
+        {"message": f"Vertrag von {tenant.username} gekündigt. Der Auszug ist gestartet."},
         status=status.HTTP_200_OK
     )
 
 @api_view(['GET', 'DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def manage_termination_view(request, tenant_id):
     """
     GET: Retrieve termination info for a tenant.
     DELETE: Remove a termination (revoking the firing), triggers recalculation.
     """
-    manage_termination_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    manage_termination_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     tenant = get_object_or_404(Tenant, id=tenant_id)
 
@@ -1328,28 +1317,26 @@ def manage_termination_view(request, tenant_id):
                 logger.info(f"Departure record deleted for tenant {tenant.username} due to termination revocation.")
             changes = recalculate_tenant_contract_dates(tenant)
             logger.info(f"Termination revoked for {tenant.username}. Changes: {changes}")
-            return Response({"message": "Termination revoked. Contract dates recalculated."}, status=status.HTTP_204_NO_CONTENT)
+            return Response({"message": "Kündigung zurückgenommen, die Wohnzeit ist neu berechnet."}, status=status.HTTP_204_NO_CONTENT)
         except Termination.DoesNotExist:
-            return Response({"error": "No termination found to delete."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Es gibt keine Kündigung zum Zurücknehmen."}, status=status.HTTP_404_NOT_FOUND)
 
 
 # --- DEPARTMENT EXTENSION MANAGEMENT ---
 
 @api_view(['GET', 'POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def manage_department_extensions_view(request, tenant_id=None):
     """
     GET: List all extensions for a specific tenant (requires tenant_id in URL).
     POST: Create a new extension.
     """
-    manage_department_extensions_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    manage_department_extensions_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     if request.method == 'GET':
         if not tenant_id:
-            return Response({"error": "Tenant ID required for listing."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Wähl einen Bewohner aus."}, status=status.HTTP_400_BAD_REQUEST)
         extensions = DepartmentExtension.objects.filter(tenant_id=tenant_id).order_by('-created_at')
         return Response(DepartmentExtensionSerializer(extensions, many=True).data)
 
@@ -1371,19 +1358,17 @@ def manage_department_extensions_view(request, tenant_id=None):
         changes = recalculate_tenant_contract_dates(tenant)
         logger.info(f"Department extension added for {tenant.username}. Changes: {changes}")
         
-        return Response({"message": "Extension added and contract recalculated."}, status=status.HTTP_201_CREATED)
+        return Response({"message": "Verlängerung eingetragen, die Wohnzeit ist neu berechnet."}, status=status.HTTP_201_CREATED)
 
 @api_view(['DELETE', 'PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def update_department_extension_view(request, extension_id):
     """
     DELETE: Remove a specific extension.
     PUT: Update months/note.
     """
-    update_department_extension_view.required_groups = VERWALTUNG_ADMIN_GROUPS
-    update_department_extension_view.required_employee_types = DEPARTMENT_EMPLOYEE_TYPE
 
     extension = get_object_or_404(DepartmentExtension, id=extension_id)
     tenant = extension.tenant
@@ -1391,7 +1376,7 @@ def update_department_extension_view(request, extension_id):
     if request.method == 'DELETE':
         extension.delete()
         changes = recalculate_tenant_contract_dates(tenant)
-        return Response({"message": "Extension deleted and contract recalculated."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Verlängerung gelöscht, die Wohnzeit ist neu berechnet."}, status=status.HTTP_204_NO_CONTENT)
     
     if request.method == 'PUT':
         # Simple update of note or months

@@ -3,10 +3,9 @@ import logging
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import IsNetworkAdmin
 from ..utils.log_utils import get_log_page
 
 logger = logging.getLogger(__name__)
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(["GET"])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsNetworkAdmin])
 def list_logs_view(request):
     try:
         limit = int(request.GET.get("limit", "100"))
@@ -62,6 +61,3 @@ def list_logs_view(request):
     except Exception as exc:
         logger.error("Failed to retrieve logs: %s", exc, exc_info=True)
         return Response({"error": "Protokolle konnten nicht geladen werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-list_logs_view.required_groups = ["Netzwerkreferat", "ADMIN"]

@@ -1,4 +1,5 @@
 import ldap
+from ldap.filter import escape_filter_chars
 from django.conf import settings
 import logging
 import uuid
@@ -100,7 +101,7 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
         try:
             con.search_s(user_dn, ldap.SCOPE_BASE)
             logger.error(f"LDAP user creation failed: User '{username}' already exists.")
-            raise ValueError(f"A user with the username '{username}' already exists.")
+            raise ValueError(f"Den Benutzernamen „{username}“ gibt es schon.")
         except ldap.NO_SUCH_OBJECT:
             pass  # Good, user does not exist.
 
@@ -145,7 +146,7 @@ def create_ldap_user(username, password, first_name, last_name, email, group_dns
 
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during user creation for '{username}': {e}")
-        raise ConnectionError(f"Could not write to the authentication server: {e}")
+        raise ConnectionError(f"Das Benutzerkonto konnte nicht angelegt werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
@@ -180,14 +181,68 @@ def update_ldap_password(username, new_password):
 
     except ldap.NO_SUCH_OBJECT:
         logger.error(f"Failed to update password: User '{username}' does not exist in LDAP.")
-        raise ValueError(f"User '{username}' does not exist in LDAP.")
+        raise ValueError(f"Das Benutzerkonto „{username}“ gibt es nicht.")
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during password update for '{username}': {e}")
-        raise ConnectionError(f"Could not update password in the authentication server: {e}")
+        raise ConnectionError(f"Das Passwort konnte nicht gesetzt werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
 
+
+# The attributes update_ldap_password() writes - together they are "the password"
+PASSWORD_ATTRIBUTES = ['userPassword', 'sambaNTPassword']
+
+def get_ldap_password_hashes(username):
+    """
+    Returns the raw password hashes of an LDAP user as {attribute: [bytes, ...]}, so a
+    password change can be undone with restore_ldap_password_hashes().
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        _, attrs = con.search_s(user_dn, ldap.SCOPE_BASE, attrlist=PASSWORD_ATTRIBUTES)[0]
+        return {attr: attrs.get(attr, []) for attr in PASSWORD_ATTRIBUTES}
+
+    except ldap.NO_SUCH_OBJECT:
+        raise ValueError(f"Das Benutzerkonto „{username}“ gibt es nicht.")
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while reading password hashes of '{username}': {e}")
+        raise ConnectionError(f"Das Benutzerkonto konnte nicht gelesen werden ({e}).")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def restore_ldap_password_hashes(username, hashes):
+    """Writes back hashes previously read with get_ldap_password_hashes()."""
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        # MOD_REPLACE with an empty list removes an attribute that was absent before
+        con.modify_s(user_dn, [(ldap.MOD_REPLACE, attr, values) for attr, values in hashes.items()])
+        logger.info(f"Restored previous password of LDAP user '{username}'.")
+        return True
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while restoring password of '{username}': {e}")
+        raise ConnectionError(f"Das alte Passwort konnte nicht wiederhergestellt werden ({e}).")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
             
 def add_user_to_group(username, group_dn):
     """Adds an existing LDAP user to a specified LDAP group."""
@@ -273,7 +328,7 @@ def delete_ldap_user(username):
         return True # The end goal is for the user to not exist, so this is a success state.
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during deletion for '{username}': {e}")
-        raise ConnectionError(f"Could not delete user from the authentication server: {e}")
+        raise ConnectionError(f"Das Benutzerkonto konnte nicht gelöscht werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
@@ -299,9 +354,9 @@ def find_ldap_user_by_email(email, employee_type=None):
 
         # Search for user by email
         if employee_type:
-            search_filter = f"(&(mail={email})(employeeType={employee_type}))"
+            search_filter = f"(&(mail={escape_filter_chars(email)})(employeeType={escape_filter_chars(employee_type)}))"
         else:
-            search_filter = f"(mail={email})"
+            search_filter = f"(mail={escape_filter_chars(email)})"
         result = con.search_s(user_base_dn, ldap.SCOPE_SUBTREE, search_filter, ['cn', 'givenName', 'sn'])
         
         if result:
@@ -320,14 +375,14 @@ def find_ldap_user_by_email(email, employee_type=None):
 
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during email search for '{email}': {e}")
-        raise ConnectionError(f"Could not search LDAP for email '{email}': {e}")
+        raise ConnectionError(f"Die Suche nach „{email}“ im Benutzerverzeichnis ist fehlgeschlagen ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
             
-def update_ldap_user_attributes(username, email=None, first_name=None, last_name=None):
+def update_ldap_user_attributes(username, email=None, first_name=None, last_name=None, employee_type=None):
     """
-    Updates LDAP user attributes (email, first name, last name).
+    Updates LDAP user attributes (email, first name, last name, employeeType).
     Only updates attributes that are provided (not None).
     """
     ldap_uri = settings.AUTH_LDAP_SERVER_URI
@@ -351,6 +406,9 @@ def update_ldap_user_attributes(username, email=None, first_name=None, last_name
 
         if last_name is not None:
             mod_list.append((ldap.MOD_REPLACE, 'sn', [last_name.encode('utf-8')]))
+
+        if employee_type is not None:
+            mod_list.append((ldap.MOD_REPLACE, 'employeeType', [employee_type.encode('utf-8')]))
 
         # Update displayName if either first_name or last_name is provided
         if first_name is not None or last_name is not None:
@@ -376,10 +434,40 @@ def update_ldap_user_attributes(username, email=None, first_name=None, last_name
 
     except ldap.NO_SUCH_OBJECT:
         logger.error(f"Failed to update LDAP user: User '{username}' does not exist.")
-        raise ValueError(f"User '{username}' does not exist in LDAP.")
+        raise ValueError(f"Das Benutzerkonto „{username}“ gibt es nicht.")
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during attribute update for '{username}': {e}")
-        raise ConnectionError(f"Could not update LDAP attributes: {e}")
+        raise ConnectionError(f"Das Benutzerkonto konnte nicht aktualisiert werden ({e}).")
+    finally:
+        if 'con' in locals() and con:
+            con.unbind_s()
+
+def get_ldap_user_emails(username):
+    """
+    Returns the mail addresses of an LDAP user as a list, or None if the user does not exist.
+    """
+    ldap_uri = settings.AUTH_LDAP_SERVER_URI
+    admin_dn = settings.AUTH_LDAP_BIND_DN
+    admin_password = settings.AUTH_LDAP_BIND_PASSWORD
+    user_base_dn = "ou=users,dc=schollheim,dc=net"
+    user_dn = f"cn={username},{user_base_dn}"
+
+    try:
+        con = ldap.initialize(ldap_uri)
+        con.protocol_version = ldap.VERSION3
+        con.simple_bind_s(admin_dn, admin_password)
+
+        try:
+            result = con.search_s(user_dn, ldap.SCOPE_BASE, attrlist=['mail'])
+        except ldap.NO_SUCH_OBJECT:
+            return None
+
+        _, attrs = result[0]
+        return [m.decode('utf-8') for m in attrs.get('mail', [])]
+
+    except ldap.LDAPError as e:
+        logger.error(f"LDAP error while reading mail of '{username}': {e}")
+        raise ConnectionError(f"Das Benutzerkonto konnte nicht gelesen werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
@@ -411,7 +499,7 @@ def ldap_username_exists(username):
 
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during username existence check for '{username}': {e}")
-        raise ConnectionError(f"Could not check username in the authentication server: {e}")
+        raise ConnectionError(f"Der Benutzername konnte nicht geprüft werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
@@ -464,7 +552,7 @@ def list_ldap_groups():
 
     except ldap.LDAPError as e:
         logger.error(f"LDAP error while listing groups: {e}")
-        raise ConnectionError(f"Could not list groups from the authentication server: {e}")
+        raise ConnectionError(f"Die Gruppen konnten nicht geladen werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
@@ -514,7 +602,7 @@ def list_ldap_users():
 
     except ldap.LDAPError as e:
         logger.error(f"LDAP error while listing users: {e}")
-        raise ConnectionError(f"Could not list users from the authentication server: {e}")
+        raise ConnectionError(f"Die Benutzerkonten konnten nicht geladen werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()
@@ -543,7 +631,7 @@ def ldap_group_exists(group_dn):
 
     except ldap.LDAPError as e:
         logger.error(f"LDAP error during group existence check for '{group_dn}': {e}")
-        raise ConnectionError(f"Could not check group in the authentication server: {e}")
+        raise ConnectionError(f"Die Gruppe konnte nicht geprüft werden ({e}).")
     finally:
         if 'con' in locals() and con:
             con.unbind_s()

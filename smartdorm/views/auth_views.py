@@ -2,17 +2,19 @@ import json
 import secrets
 import string
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
-from django.http import JsonResponse
+from django.conf import settings
+from django.http import Http404, JsonResponse
 from django.views.decorators.http import require_POST
 from django.middleware.csrf import get_token
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 from pprint import pprint
 from django.contrib.auth.models import User
+from ..dev_accounts import DEV_ACCOUNTS
 from ..models import Tenant
+from ..permissions import Public, LoggedIn
 from ..utils.email_utils import send_email_message
 from ..utils.subtenant_utils import is_subtenant_account
 from ..utils.ldap_utils import update_ldap_password, find_ldap_user_by_email
@@ -41,7 +43,7 @@ def get_user_data(user):
     }
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([Public])
 @authentication_classes([SessionAuthentication]) # Use session auth
 def login_view(request):
     try:
@@ -49,10 +51,10 @@ def login_view(request):
         password = request.data.get('password')
         remember_me = request.data.get('rememberMe', False)
     except json.JSONDecodeError:
-        return Response({"success": False, "message": "Invalid JSON data"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"success": False, "message": "Ungültige Anfrage."}, status=status.HTTP_400_BAD_REQUEST)
 
     if not username or not password:
-        return Response({"success": False, "message": "Username and password required"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"success": False, "message": "Gib Benutzername und Passwort ein."}, status=status.HTTP_400_BAD_REQUEST)
 
     user = authenticate(request, username=username, password=password)
 
@@ -73,30 +75,42 @@ def login_view(request):
              response_data = {"success": True, "user": user_data}
              return Response(response_data, status=status.HTTP_200_OK)
         else:
-             return Response({"success": False, "message": "Login successful but failed to retrieve user data."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             return Response({"success": False, "message": "Angemeldet, aber deine Daten konnten nicht geladen werden. Lad die Seite neu."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     else:
-        return Response({"success": False, "message": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({"success": False, "message": "Benutzername oder Passwort stimmt nicht."}, status=status.HTTP_401_UNAUTHORIZED)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def logout_view(request):
     auth_logout(request)
-    return Response({"success": True, "message": "Successfully logged out"}, status=status.HTTP_200_OK)
+    return Response({"success": True, "message": "Abgemeldet."}, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def me_view(request):
     user_data = get_user_data(request.user)
     if user_data:
         return Response({"authenticated": True, "user": user_data}, status=status.HTTP_200_OK)
     else:
-        return Response({"authenticated": False, "message": "User authenticated but data unavailable"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"authenticated": False, "message": "Deine Daten konnten nicht geladen werden."}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([Public])
+@authentication_classes([SessionAuthentication])
+def dev_accounts_view(request):
+    """
+    The dev accounts for the login page's picker, only where SHOW_DEV_ACCOUNTS is set. Never
+    their password: the test system is reachable from the internet.
+    """
+    if not settings.SHOW_DEV_ACCOUNTS:
+        raise Http404
+    return Response([{"username": a.username, "description": a.description} for a in DEV_ACCOUNTS])
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([Public])
 @authentication_classes([SessionAuthentication])
 def password_reset_view(request):
     """
@@ -107,7 +121,7 @@ def password_reset_view(request):
         email = request.data.get('email')
         if not email:
             return Response(
-                {"success": False, "message": "Email address is required"}, 
+                {"success": False, "message": "Gib deine E-Mail-Adresse ein."}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -117,7 +131,7 @@ def password_reset_view(request):
             if not username:
                 # Don't reveal if email exists or not for security
                 return Response(
-                    {"success": True, "message": "Falls die E-Mail-Adresse existiert, wurde eine Passwort-Reset-E-Mail gesendet."}, 
+                    {"success": True, "message": "Falls es ein Konto mit dieser Adresse gibt, ist ein neues Passwort per Mail unterwegs."}, 
                     status=status.HTTP_200_OK
                 )
             
@@ -132,7 +146,7 @@ def password_reset_view(request):
             logger.error(f"Error during LDAP user search for email '{email}': {e}")
             # Don't reveal if email exists or not for security
             return Response(
-                {"success": True, "message": "Falls die E-Mail-Adresse existiert, wurde eine Passwort-Reset-E-Mail gesendet."}, 
+                {"success": True, "message": "Falls es ein Konto mit dieser Adresse gibt, ist ein neues Passwort per Mail unterwegs."}, 
                 status=status.HTTP_200_OK
             )
 
@@ -146,7 +160,7 @@ def password_reset_view(request):
         except Exception as e:
             logger.error(f"Failed to update LDAP password for user {username}: {e}")
             return Response(
-                {"success": False, "message": "Failed to reset password. Please contact support."}, 
+                {"success": False, "message": "Das Passwort konnte nicht zurückgesetzt werden. Melde dich beim Netzwerkreferat."}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -166,24 +180,24 @@ def password_reset_view(request):
 
         if email_sent:
             return Response(
-                {"success": True, "message": "Passwort-Reset-E-Mail erfolgreich gesendet."}, 
+                {"success": True, "message": "Falls es ein Konto mit dieser Adresse gibt, ist ein neues Passwort per Mail unterwegs."}, 
                 status=status.HTTP_200_OK
             )
         else:
             return Response(
-                {"success": False, "message": "Failed to send password reset email. Please contact support."}, 
+                {"success": False, "message": "Die Mail mit dem neuen Passwort konnte nicht verschickt werden. Melde dich beim Netzwerkreferat."}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
     except Exception as e:
         logger.error(f"Password reset error: {e}")
         return Response(
-            {"success": False, "message": "An error occurred during password reset."}, 
+            {"success": False, "message": "Das hat nicht geklappt. Versuch's später nochmal."}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 @authentication_classes([SessionAuthentication])
 def password_change_view(request):
     """
@@ -238,7 +252,7 @@ def password_change_view(request):
         except Exception as e:
             logger.error(f"Failed to update LDAP password for user {request.user.username}: {e}")
             return Response(
-                {"success": False, "message": "Fehler beim Ändern des Passworts. Bitte versuchen Sie es später erneut."}, 
+                {"success": False, "message": "Das Passwort konnte nicht geändert werden. Versuch's später nochmal."}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
             
@@ -256,6 +270,4 @@ def password_change_view(request):
 #@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
 #@authentication_classes([SessionAuthentication])
 #def netzwerk_dashboard_view(request):
-#    tenant_dashboard_view.required_groups = ['Netzwerkreferat']
-#    tenant_dashboard_view.required_employee_types = ['TENANT']
 #    return Response({"message": "Welcome to the netwerk dashboard!"})

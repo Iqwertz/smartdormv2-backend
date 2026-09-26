@@ -14,7 +14,10 @@ class TenantSerializer(serializers.ModelSerializer):
             'move_out', 'name', 'nationality', 'note', 'probation_end', 'study_field',
             'sublet', 'surname', 'tel_number', 'university', 'username', 'new_address'
         ]
-        read_only_fields = ['id']  # ID is auto-generated
+        # The username names the tenant's LDAP account, which is created with it and cannot
+        # follow a rename. Writable, it would let an edit point this record - and with it a
+        # credential resend - at somebody else's account.
+        read_only_fields = ['id', 'username']
 
 class NewTenantSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
@@ -57,6 +60,7 @@ class SubtenantProfileSerializer(serializers.ModelSerializer):
     """
     tenant_name = serializers.SerializerMethodField(read_only=True)
     room_name = serializers.SerializerMethodField(read_only=True)
+    room_floor = serializers.SerializerMethodField(read_only=True)
     duration_months = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
@@ -64,6 +68,7 @@ class SubtenantProfileSerializer(serializers.ModelSerializer):
         fields = [
             'name', 'surname', 'email', 'move_in', 'move_out',
             'duration_months', 'university_confirmation', 'tenant_name', 'room_name',
+            'room_floor',
         ]
 
     def get_tenant_name(self, obj):
@@ -74,6 +79,13 @@ class SubtenantProfileSerializer(serializers.ModelSerializer):
     def get_room_name(self, obj):
         if obj.room:
             return obj.room.name
+        return None
+
+    def get_room_floor(self, obj):
+        """Hallway of the sublet room (e.g. 'H2F1'); the frontend derives the
+        room's static schollwire IP from it together with the room name."""
+        if obj.room:
+            return obj.room.floor
         return None
 
     def get_duration_months(self, obj):

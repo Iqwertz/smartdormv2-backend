@@ -18,11 +18,10 @@ class SubtenantApiGuardMiddleware:
     """
     Restricts subtenant accounts to the handful of API paths their dashboard needs.
 
-    Declaring this per view was not an option: `required_groups` / `required_employee_types`
-    are silently ignored on @api_view endpoints (see permissions.group_required), so most
-    endpoints currently resolve to "any authenticated user". Guarding the API surface
-    centrally means a subtenant cannot reach resident data through an endpoint whose own
-    permission declaration does not hold.
+    The per-view access rules cannot express this: a subtenant is a logged-in account, so every
+    `LoggedIn` endpoint would admit them, and older subtenant accounts even carry the TENANT
+    employeeType. Guarding the API surface centrally keeps it default-deny - an endpoint added
+    later stays closed to subtenants until it is opened here deliberately.
     """
 
     def __init__(self, get_response):

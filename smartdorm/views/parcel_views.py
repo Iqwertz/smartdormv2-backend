@@ -3,14 +3,13 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Max, Q
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 
 from ..models import Tenant, Subtenant, Parcel, Room
 from ..serializers import ParcelSerializer, ParcelCreateRequestSerializer
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import IsVerwaltung
 from ..utils.email_utils import send_email_message
 
 import logging
@@ -58,14 +57,12 @@ def find_current_subtenants_by_name(name, surname):
 # --- API Views ---
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic # Ensure parcel creation and ID generation are atomic
 def create_parcel_view(request):
     """
     Creates a parcel for a tenant or subtenant and notifies them.
     """
-    create_parcel_view.required_groups = ['ADMIN', 'Verwaltung']
-    # create_parcel_view.required_employee_types = ['DEPARTMENT']
 
     request_serializer = ParcelCreateRequestSerializer(data=request.data)
     if not request_serializer.is_valid():
@@ -92,16 +89,16 @@ def create_parcel_view(request):
             if tenants.count() == 1:
                 recipient_tenant = tenants.first()
             elif tenants.count() > 1:
-                return Response({"error": f"Name '{name_str} {surname_str}' is not unique for current tenants. Please clarify."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": f"Es gibt mehrere Bewohner namens {name_str} {surname_str}. Wähl die Person über die Zimmernummer aus."}, status=status.HTTP_400_BAD_REQUEST)
             else: # No tenant found, look for subtenant
                 subtenants = find_current_subtenants_by_name(name_str, surname_str)
                 if subtenants.count() == 1:
                     recipient_subtenant = subtenants.first()
                 elif subtenants.count() > 1:
-                    return Response({"error": f"Name '{name_str} {surname_str}' is not unique for current subtenants. Please clarify."}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": f"Es gibt mehrere Untermieter namens {name_str} {surname_str}. Wähl die Person über die Zimmernummer aus."}, status=status.HTTP_400_BAD_REQUEST)
         
         if not recipient_tenant and not recipient_subtenant:
-            return Response({"error": f"No current tenant or subtenant found for the provided information."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": f"Dazu gibt es keinen aktuellen Bewohner oder Untermieter."}, status=status.HTTP_404_NOT_FOUND)
 
         # Determine recipient details for email
         if recipient_tenant:
@@ -131,7 +128,7 @@ def create_parcel_view(request):
 
         # Send email notification
         if recipient_email:
-            email_subject = "Benachrichtigung: Post für Dich"
+            email_subject = "Benachrichtigung: Post für dich"
             if registered:
                 count_message = "ist ein Einschreiben"
                 actual_quantity_for_email = 1
@@ -164,20 +161,18 @@ def create_parcel_view(request):
         return Response({"error": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Error creating parcel: {e}", exc_info=True)
-        return Response({"error": "An unexpected error occurred while creating the parcel."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Das Paket konnte nicht eingetragen werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 def list_parcels_view(request):
     """
     Lists parcels. By default, lists non-picked-up parcels.
     Query param `status=all` to list all parcels.
     Query param `status=pickedup` to list only picked-up parcels.
     """
-    list_parcels_view.required_groups = ['ADMIN', 'Verwaltung']
-    # list_parcels_view.required_employee_types = ['DEPARTMENT']
 
     parcel_status_filter = request.GET.get('status', 'pending').lower()
 
@@ -188,7 +183,7 @@ def list_parcels_view(request):
     elif parcel_status_filter == 'pickedup':
         queryset = queryset.filter(picked_up__isnull=False)
     elif parcel_status_filter != 'all':
-        return Response({"error": "Invalid status filter. Use 'pending', 'pickedup', or 'all'."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Ungültiger Filter."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Order by arrival, newest first
     parcels = queryset.order_by('-arrived')
@@ -198,22 +193,20 @@ def list_parcels_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsVerwaltung])
 @transaction.atomic
 def pickup_parcel_view(request, external_id):
     """
     Marks a parcel as picked up.
     """
-    pickup_parcel_view.required_groups = ['ADMIN', 'Verwaltung']
-    # pickup_parcel_view.required_employee_types = ['DEPARTMENT'] 
 
     try:
         parcel = Parcel.objects.get(external_id=external_id)
     except Parcel.DoesNotExist:
-        return Response({"error": "Parcel not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Dieses Paket gibt es nicht."}, status=status.HTTP_404_NOT_FOUND)
 
     if parcel.picked_up:
-        return Response({"message": "Parcel already marked as picked up.", "data": ParcelSerializer(parcel).data}, status=status.HTTP_200_OK)
+        return Response({"message": "Das Paket ist schon abgeholt.", "data": ParcelSerializer(parcel).data}, status=status.HTTP_200_OK)
 
     parcel.picked_up = timezone.now()
     parcel.save()

@@ -1,6 +1,5 @@
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
@@ -8,20 +7,14 @@ from django.db.models import Count
 from datetime import timedelta
 import uuid
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import Groups, LoggedIn, CheckedInView, user_in_groups
 from ..models import Event, AttendanceSession, AttendanceRecord, Tenant, get_active_tenants, BaseAttendanceRecord
 from ..serializers import EventSerializer, AttendanceSessionSerializer, AttendanceRecordSerializer, BaseAttendanceRecordSerializer
 
 def _is_event_admin(request, event):
-    user_groups = [group.name for group in request.user.groups.all()]
-    if 'ADMIN' in user_groups:
-        return True
-    
-    # Check if user is in any of the configured admin_groups
-    admin_groups = event.admin_groups
-    if isinstance(admin_groups, list):
-        return any(group in user_groups for group in admin_groups)
-    return False
+    """Event admins are the groups stored on the event itself (ADMIN always passes)."""
+    admin_groups = event.admin_groups if isinstance(event.admin_groups, list) else []
+    return user_in_groups(request.user, admin_groups)
 
 
 def _build_attendance_code(session):
@@ -44,7 +37,7 @@ def _parse_attendance_code(code):
     return session_id, token
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_manageable_events_view(request):
     events = Event.objects.all().order_by('-created_at')
     manageable = [event for event in events if _is_event_admin(request, event)]
@@ -52,7 +45,7 @@ def list_manageable_events_view(request):
     return Response(serializer.data)
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_create_events_view(request):
     """
     GET: List all events.
@@ -66,9 +59,8 @@ def list_create_events_view(request):
         
     elif request.method == 'POST':
         # Check permissions for creating
-        user_groups = [group.name for group in request.user.groups.all()]
-        if not any(g in user_groups for g in ['ADMIN', 'Netzwerkreferat', 'Heimrat']):
-            return Response({"error": "Insufficient permissions to create events."}, status=status.HTTP_403_FORBIDDEN)
+        if not user_in_groups(request.user, [Groups.NETZWERKREFERAT, Groups.HEIMRAT]):
+            return Response({"error": "Events dürfen nur der Heimrat und das Netzwerkreferat anlegen."}, status=status.HTTP_403_FORBIDDEN)
             
         serializer = EventSerializer(data=request.data)
         if serializer.is_valid():
@@ -77,7 +69,7 @@ def list_create_events_view(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def detail_event_view(request, event_id):
     event = get_object_or_404(Event, id=event_id)
     
@@ -87,7 +79,7 @@ def detail_event_view(request, event_id):
         
     # For PUT/DELETE, must be an event admin
     if not _is_event_admin(request, event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
         
     if request.method == 'PUT':
         serializer = EventSerializer(event, data=request.data, partial=True)
@@ -101,7 +93,7 @@ def detail_event_view(request, event_id):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def list_create_sessions_view(request, event_id):
     event = get_object_or_404(Event, id=event_id)
     
@@ -112,7 +104,7 @@ def list_create_sessions_view(request, event_id):
         
     elif request.method == 'POST':
         if not _is_event_admin(request, event):
-            return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
 
         raw_title = request.data.get('title', '')
         title = raw_title.strip() if isinstance(raw_title, str) else ''
@@ -125,11 +117,11 @@ def list_create_sessions_view(request, event_id):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def toggle_session_status_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
 
     if session.status == 'CREATED':
         session.status = 'ACTIVE'
@@ -151,15 +143,15 @@ def toggle_session_status_view(request, session_id):
     return Response(serializer.data)
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def delete_session_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
 
     if AttendanceRecord.objects.filter(session=session).exists():
         return Response(
-            {"error": "Session has attendance records. Clear all tracked attendance before deleting this session."},
+            {"error": "In dieser Session wurde schon Anwesenheit erfasst. Entferne sie zuerst, dann kannst du die Session löschen."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -167,23 +159,23 @@ def delete_session_view(request, session_id):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def start_session_part_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
         
     part = request.data.get('part')
     if part is None:
-        return Response({"error": "Must provide a 'part' number to start."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Gib an, welcher Teil starten soll."}, status=status.HTTP_400_BAD_REQUEST)
         
     try:
         part = int(part)
     except ValueError:
-        return Response({"error": "'part' must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der Teil muss eine ganze Zahl sein."}, status=status.HTTP_400_BAD_REQUEST)
 
     if part < 1 or part > session.event.parts_count:
-        return Response({"error": f"Part must be between 1 and {session.event.parts_count}."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": f"Der Teil muss zwischen 1 und {session.event.parts_count} liegen."}, status=status.HTTP_400_BAD_REQUEST)
         
     session.status = 'ACTIVE'
     session.current_part = part
@@ -195,11 +187,11 @@ def start_session_part_view(request, session_id):
     return Response(serializer.data)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def stop_session_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
         
     session.status = 'CLOSED'
     session.current_part = 0
@@ -210,14 +202,14 @@ def stop_session_view(request, session_id):
     return Response(serializer.data)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def get_current_qr_token_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
         
     if session.status != 'ACTIVE' or session.current_part == 0:
-        return Response({"error": "Session is not active."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Die Session läuft gerade nicht."}, status=status.HTTP_400_BAD_REQUEST)
         
     # Rotate token if older than 30 seconds
     now = timezone.now()
@@ -235,7 +227,7 @@ def get_current_qr_token_view(request, session_id):
     })
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def scan_attendance_view(request):
     """
     Tenant endpoint to submit a scanned QR code.
@@ -244,7 +236,7 @@ def scan_attendance_view(request):
 
     parsed_code = _parse_attendance_code(code)
     if not parsed_code:
-        return Response({"error": "code is required and must be formatted as sessionId_token."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der QR-Code ist ungültig. Scann ihn nochmal."}, status=status.HTTP_400_BAD_REQUEST)
 
     session_id, token = parsed_code
 
@@ -261,7 +253,7 @@ def scan_attendance_view(request):
     
     # Verify the session is active and the token matches
     if session.status != 'ACTIVE' or session.current_part == 0:
-        return Response({"error": "Attendance session is currently closed."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Die Anwesenheitskontrolle ist gerade geschlossen."}, status=status.HTTP_400_BAD_REQUEST)
         
     # Accept current token, or previous token if within a 15-second grace period
     now = timezone.now()
@@ -270,7 +262,7 @@ def scan_attendance_view(request):
     is_valid_token = (session.secret_token == token) or (grace_period_active and session.previous_secret_token == token)
     
     if not is_valid_token:
-        return Response({"error": "Invalid or expired QR code"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Der QR-Code ist abgelaufen oder ungültig. Scann den aktuellen Code nochmal."}, status=status.HTTP_400_BAD_REQUEST)
         
     # Has the tenant already scanned this part?
     record, created = AttendanceRecord.objects.get_or_create(
@@ -292,14 +284,14 @@ def scan_attendance_view(request):
     )
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def attendance_report_view(request, session_id):
     """
     Returns an attendance matrix for a specific session.
     """
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
         
     records = AttendanceRecord.objects.filter(session=session)
     tenants = Tenant.objects.filter(move_out__gte=timezone.now().date())
@@ -346,18 +338,18 @@ def attendance_report_view(request, session_id):
     })
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def manual_override_view(request, session_id):
     session = get_object_or_404(AttendanceSession, id=session_id)
     if not _is_event_admin(request, session.event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
         
     tenant_id = request.data.get('tenant_id')
     part = request.data.get('part')
     present = request.data.get('present', True)
     
     if tenant_id is None or part is None:
-        return Response({"error": "tenant_id and part are required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Bewohner und Teil fehlen."}, status=status.HTTP_400_BAD_REQUEST)
         
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
@@ -371,10 +363,10 @@ def manual_override_view(request, session_id):
     else:
         AttendanceRecord.objects.filter(tenant=tenant, session=session, part=part).delete()
         
-    return Response({"message": "Override applied successfully."})
+    return Response({"message": "Anwesenheit geändert."})
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([LoggedIn])
 def my_attendance_history_view(request):
     """
     Returns attendance history for the logged-in tenant, including both regular and base attendance records.
@@ -428,7 +420,7 @@ def my_attendance_history_view(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def base_attendance_overview_view(request, event_id):
     """
     Returns a list of all active tenants with their attendance summary for a specific event.
@@ -437,7 +429,7 @@ def base_attendance_overview_view(request, event_id):
     """
     event = get_object_or_404(Event, id=event_id)
     if not _is_event_admin(request, event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
     
     active_tenants = get_active_tenants()
     required_parts_threshold = max(1, event.required_parts)
@@ -482,7 +474,7 @@ def base_attendance_overview_view(request, event_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def tenant_attendance_detail_view(request, event_id, tenant_id):
     """
     Returns detailed attendance information for a specific tenant in a specific event.
@@ -490,7 +482,7 @@ def tenant_attendance_detail_view(request, event_id, tenant_id):
     """
     event = get_object_or_404(Event, id=event_id)
     if not _is_event_admin(request, event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
     
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
@@ -548,7 +540,7 @@ def tenant_attendance_detail_view(request, event_id, tenant_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CheckedInView])
 def add_or_update_base_attendance_view(request, event_id, tenant_id):
     """
     Create or update base attendance for a tenant in a specific event.
@@ -556,7 +548,7 @@ def add_or_update_base_attendance_view(request, event_id, tenant_id):
     """
     event = get_object_or_404(Event, id=event_id)
     if not _is_event_admin(request, event):
-        return Response({"error": "You are not an admin for this event."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Du bist für dieses Event nicht zuständig."}, status=status.HTTP_403_FORBIDDEN)
     
     tenant = get_object_or_404(Tenant, id=tenant_id)
     
@@ -564,19 +556,19 @@ def add_or_update_base_attendance_view(request, event_id, tenant_id):
     note = request.data.get('note', '')
     
     if parts_count is None:
-        return Response({"error": "parts_count is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Gib die Anzahl der Sessions an."}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
         parts_count = int(parts_count)
         if parts_count < 0:
-            raise ValueError("parts_count must be non-negative")
+            raise ValueError("Die Anzahl darf nicht negativ sein.")
     except (ValueError, TypeError):
-        return Response({"error": "parts_count must be a non-negative integer."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Die Anzahl muss eine ganze Zahl ab 0 sein."}, status=status.HTTP_400_BAD_REQUEST)
     
     if parts_count == 0:
         # Delete base attendance record if it exists
         BaseAttendanceRecord.objects.filter(tenant=tenant, event=event).delete()
-        return Response({"message": "Base attendance removed."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Frühere Anwesenheit entfernt."}, status=status.HTTP_204_NO_CONTENT)
     
     # Create or update
     base_attendance, created = BaseAttendanceRecord.objects.update_or_create(

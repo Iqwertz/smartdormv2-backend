@@ -1,11 +1,10 @@
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import LoggedIn, IsVerwaltung
 from ..models import Tenant, Subtenant, Room, Department
 from ..serializers import DepartmentSerializer
 
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsVerwaltung])
 def tenants_for_select_view(request):
     """
      API endpoint to retrieve a list of current tenants with minimal data 
@@ -75,13 +74,13 @@ def tenants_for_select_view(request):
     except Exception as e:
         logger.error(f"Error retrieving recipients for select (filter: {include_filter}): {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving recipient list for selection."},
+            {"error": "Die Empfängerliste konnte nicht geladen werden."},
              status=status.HTTP_500_INTERNAL_SERVER_ERROR
          )
         
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def departments_for_select_view(request):
     """
     API endpoint to retrieve a list of all departments for select dropdowns.
@@ -93,13 +92,13 @@ def departments_for_select_view(request):
     except Exception as e:
         logger.error(f"Error retrieving departments for select: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving department list."},
+            {"error": "Die Referate konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsVerwaltung])
 def rooms_for_select_view(request):
     """
     API endpoint to retrieve a list of all rooms for select dropdowns.
@@ -113,6 +112,6 @@ def rooms_for_select_view(request):
     except Exception as e:
         logger.error(f"Error retrieving rooms for select: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while retrieving room list."},
+            {"error": "Die Zimmer konnten nicht geladen werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

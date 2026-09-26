@@ -3,7 +3,6 @@ from django.http import HttpResponse
 from django.utils import timezone
 from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Max, Sum, Count, Prefetch
@@ -17,7 +16,10 @@ import threading
 
 from ..utils.helper import checkValidSemesterFormat, get_next_semester
 from ..utils.email_utils import send_email_message
-from ..permissions import GroupAndEmployeeTypePermission
+from ..permissions import (
+    LoggedIn, IsHeimrat, IsSemesterManager, IsEngagementManager, IsNetworkAdmin,
+    CanViewResidentOverview, CanViewResidentEngagements, CanViewResidentStatistics,
+)
 from ..models import EngagementApplication, GlobalAppSettings, Engagement, Tenant, Department
 from ..serializers import (
     DepartmentSerializer, GlobalAppSettingsSerializer, EngagementApplicationListSerializer,
@@ -109,7 +111,7 @@ class PDFGenerator:
 
             img_w, img_h = pil_img.size
             if img_w <= 0 or img_h <= 0:
-                 raise ValueError("Invalid image dimensions")
+                 raise ValueError("Ungültige Bildgröße")
             aspect = img_w / float(img_h)
 
             # Simplified logic: scale to fit within bounds while maintaining aspect ratio
@@ -289,31 +291,30 @@ def trigger_pdf_regeneration(semester):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([LoggedIn])
 def get_applications_pdf(request):
     """
     Serves a cached PDF of engagement applications for a given semester.
     Accessible to all tenants, but respects the 'show_applications' global setting.
     """
-    get_applications_pdf.required_employee_types = ['TENANT']
     settings = GlobalAppSettings.load()
 
     semester = request.GET.get('semester')
     
     if not settings.show_applications and semester == get_next_semester(settings.current_semester):
-        return Response({"error": "Applications are not currently visible to tenants."}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"error": "Die Bewerbungen sind gerade nicht öffentlich."}, status=status.HTTP_403_FORBIDDEN)
     
     if not semester:
         semester = get_next_semester(settings.current_semester)
     
     if not checkValidSemesterFormat(semester):
-        return Response({"error": "Invalid semester format. Use SSYY or WSYY/YY."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Ungültiges Semester. Schreib es als SS26 oder WS26/27."}, status=status.HTTP_400_BAD_REQUEST)
 
     pdf_data = _get_or_generate_cached_pdf(semester)
 
     if pdf_data is None:
         return Response(
-            {"error": "PDF is currently being generated. Please try again in a moment."},
+            {"error": "Das PDF wird gerade erstellt. Versuch's in ein paar Sekunden nochmal."},
             status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
     
@@ -328,7 +329,7 @@ def get_applications_pdf(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsSemesterManager])
 def set_current_semester_view(request):
     """
     API endpoint to set the current_semester.
@@ -336,14 +337,12 @@ def set_current_semester_view(request):
     Expects JSON: {"current_semester": "SS2025"}
     Uses POST method.
     """
-    set_current_semester_view.required_groups = ['Heimrat', 'Netzwerkreferat']
-    # set_current_semester_view.required_employee_types = []
 
     new_semester = request.data.get('current_semester')
     
     if not new_semester or not isinstance(new_semester, str) or not checkValidSemesterFormat(new_semester):
         return Response(
-            {"error": "Field 'current_semester' is required and must be a string in the format SSYY or WSYY/YY."},
+            {"error": "Gib das Semester als SS26 oder WS26/27 an."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -357,13 +356,13 @@ def set_current_semester_view(request):
     except Exception as e:
         logger.error(f"Error setting current semester: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while updating the current semester."},
+            {"error": "Das Semester konnte nicht geändert werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 @api_view(['POST']) 
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsSemesterManager])
 def set_applications_open_view(request):
     """
     API endpoint to set the applications_open status.
@@ -371,13 +370,11 @@ def set_applications_open_view(request):
     Expects JSON: {"applications_open": true}
     Uses POST method.
     """
-    set_applications_open_view.required_groups = ['Heimrat', 'Netzwerkreferat']
-    # set_applications_open_view.required_employee_types = []
 
     applications_open_status = request.data.get('applications_open')
     if applications_open_status is None or not isinstance(applications_open_status, bool):
         return Response(
-            {"error": "Field 'applications_open' is required and must be a boolean (true/false)."},
+            {"error": "Ungültiger Wert für die Bewerbungsphase."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -391,25 +388,24 @@ def set_applications_open_view(request):
     except Exception as e:
         logger.error(f"Error setting applications open status: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while updating the applications open status."},
+            {"error": "Die Bewerbungsphase konnte nicht umgeschaltet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsSemesterManager])
 def set_show_applications_view(request):
     """
     API endpoint to set the show_applications status.
     Requires user to be in 'Heimrat' or 'Netzwerkreferat' group.
     Expects JSON: {"show_applications": true}
     """
-    set_show_applications_view.required_groups = ['Heimrat', 'Netzwerkreferat']
 
     show_applications_status = request.data.get('show_applications')
     if show_applications_status is None or not isinstance(show_applications_status, bool):
         return Response(
-            {"error": "Field 'show_applications' is required and must be a boolean (true/false)."},
+            {"error": "Ungültiger Wert für die Sichtbarkeit der Bewerbungen."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -423,20 +419,18 @@ def set_show_applications_view(request):
     except Exception as e:
         logger.error(f"Error setting show_applications status: {e}", exc_info=True)
         return Response(
-            {"error": "An error occurred while updating the show_applications status."},
+            {"error": "Die Sichtbarkeit der Bewerbungen konnte nicht umgeschaltet werden."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsHeimrat])
 def heimrat_list_applications_view(request):
-    heimrat_list_applications_view.required_groups = ['Heimrat', 'ADMIN']
-
     settings = GlobalAppSettings.load()
     next_semester = get_next_semester(settings.current_semester)
     if not next_semester:
-        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Das Bewerbungssemester konnte nicht bestimmt werden. Sag dem Heimrat Bescheid."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # --- THE FIX: Use .values() for maximum performance ---
     applications_data = EngagementApplication.objects.filter(
@@ -476,10 +470,9 @@ def heimrat_list_applications_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsHeimrat])
 def heimrat_get_application_image_view(request, app_id):
     """ Serves an application image specifically for Heimrat, bypassing visibility settings. """
-    heimrat_get_application_image_view.required_groups = ['Heimrat', 'ADMIN']
     
     application = get_object_or_404(EngagementApplication, id=app_id)
     if not application.image:
@@ -489,12 +482,11 @@ def heimrat_get_application_image_view(request, app_id):
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsHeimrat])
 def heimrat_delete_application_view(request, app_id):
     """
     API endpoint for Heimrat to delete any engagement application.
     """
-    heimrat_delete_application_view.required_groups = ['Heimrat', 'ADMIN']
 
     try:
         application = EngagementApplication.objects.get(id=app_id)
@@ -503,31 +495,30 @@ def heimrat_delete_application_view(request, app_id):
         trigger_pdf_regeneration(application_semester)
         return Response(status=status.HTTP_204_NO_CONTENT)
     except EngagementApplication.DoesNotExist:
-        return Response({"error": "Application not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Diese Bewerbung gibt es nicht."}, status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsHeimrat])
 @parser_classes([MultiPartParser, FormParser])
 def heimrat_create_application_view(request):
     """
     API endpoint for Heimrat to create an application on behalf of a tenant,
     bypassing the 'applications_open' check.
     """
-    heimrat_create_application_view.required_groups = ['Heimrat', 'ADMIN']
     
     settings = GlobalAppSettings.load()
     next_semester = get_next_semester(settings.current_semester)
     if not next_semester:
-        return Response({"error": "Could not determine the application semester."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Das Bewerbungssemester konnte nicht bestimmt werden. Sag dem Heimrat Bescheid."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     data = request.data.copy()
     tenant_id = data.get('tenant')
     department_id = data.get('department')
 
     if EngagementApplication.objects.filter(tenant_id=tenant_id, semester=next_semester, department_id=department_id).exists():
-        return Response({"error": f"This tenant has already applied for this department for the {next_semester} semester."}, status=status.HTTP_409_CONFLICT)
+        return Response({"error": f"Diese Person hat sich für dieses Referat im {next_semester} schon beworben."}, status=status.HTTP_409_CONFLICT)
 
     serializer = HeimratEngagementApplicationCreateSerializer(data=data)
     if not serializer.is_valid():
@@ -551,26 +542,25 @@ def heimrat_create_application_view(request):
             image_name=image_file.name if image_file else None,
         )
         trigger_pdf_regeneration(next_semester)
-        return Response({"message": "Application created successfully on behalf of the tenant."}, status=status.HTTP_201_CREATED)
+        return Response({"message": "Bewerbung eingetragen."}, status=status.HTTP_201_CREATED)
     except Exception as e:
         logger.error(f"Heimrat error creating engagement application: {e}", exc_info=True)
-        return Response({"error": "An internal error occurred while saving the application."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "Die Bewerbung konnte nicht gespeichert werden."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 HEIMRAT_INFO_GROUPS = ['Heimrat', 'Inforeferat', 'ADMIN']
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsEngagementManager])
 def list_engagements_admin_view(request):
     """
     Lists engagements, filterable by compensation status.
     ?compensated=true or ?compensated=false
     """
-    list_engagements_admin_view.required_groups = HEIMRAT_INFO_GROUPS
 
     compensated = request.query_params.get('compensated', '').lower()
     if compensated not in ['true', 'false']:
-        return Response({"error": "Query parameter 'compensated' must be 'true' or 'false'."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Ungültiger Filter."}, status=status.HTTP_400_BAD_REQUEST)
 
     queryset = Engagement.objects.filter(
         compensate=(compensated == 'true')
@@ -581,10 +571,9 @@ def list_engagements_admin_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsEngagementManager])
 def create_engagement_admin_view(request):
     """ Creates a new engagement for a tenant. """
-    create_engagement_admin_view.required_groups = HEIMRAT_INFO_GROUPS
 
     serializer = EngagementCreateByHeimratSerializer(data=request.data)
     if not serializer.is_valid():
@@ -657,10 +646,9 @@ def create_engagement_admin_view(request):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsEngagementManager])
 def update_engagement_view(request, engagement_id):
     """ Updates the entry for a specific engagement, points and note can be updated. """
-    update_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
     serializer = EngagementUpdateSerializer(data=request.data)
@@ -676,10 +664,9 @@ def update_engagement_view(request, engagement_id):
 
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsEngagementManager])
 def delete_engagement_view(request, engagement_id):
     """ Deletes an engagement. """
-    delete_engagement_view.required_groups = HEIMRAT_INFO_GROUPS
     
     engagement = get_object_or_404(Engagement, id=engagement_id)
     tenant = engagement.tenant
@@ -715,11 +702,10 @@ def delete_engagement_view(request, engagement_id):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsEngagementManager])
 @transaction.atomic
 def toggle_engagement_compensate_view(request, engagement_id):
     """ Toggles the compensation status of a single engagement. """
-    toggle_engagement_compensate_view.required_groups = HEIMRAT_INFO_GROUPS
 
     engagement = get_object_or_404(
         Engagement.objects.select_related('tenant', 'department'), 
@@ -772,15 +758,14 @@ def toggle_engagement_compensate_view(request, engagement_id):
             }
         )
 
-    return Response({"message": f"Engagement compensation status updated to {new_compensate_status}."})
+    return Response({"message": f"{'Entlastet.' if new_compensate_status else 'Entlastung zurückgenommen.'}"})
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsEngagementManager])
 @transaction.atomic
 def compensate_all_engagements_view(request):
     """ Sets all uncompensated engagements to compensated and sends a mail to every tenant that had an engagement compensated. """
-    compensate_all_engagements_view.required_groups = HEIMRAT_INFO_GROUPS
     
     # Find all engagements that are not yet compensated
     engagements_to_compensate = Engagement.objects.filter(compensate=False).select_related('tenant', 'department')
@@ -815,21 +800,19 @@ def compensate_all_engagements_view(request):
             }
         )
 
-    return Response({"message": f"{updated_count} engagement(s) successfully compensated."})
+    return Response({"message": f"{updated_count} Ämter entlastet."})
 
 
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsNetworkAdmin])
 def export_engagement_tenants_csv(request):
     """
     API endpoint to export a CSV file of all current tenants who are part of an engagement.
     The list is sorted by department name, then by tenant name.
     This endpoint was implemented for the patches so Bene can write everyone that wants a badge for a department he did in the past. So this function is more of a onetime use and not implemented in the frontend. But it is kept in case we need it sometime in the future.
     """
-    export_engagement_tenants_csv.required_groups = ['Netzwerkreferat', 'ADMIN']
-    export_engagement_tenants_csv.required_employee_types = ['TENANT']
 
     today = timezone.now().date()
 
@@ -844,7 +827,7 @@ def export_engagement_tenants_csv(request):
     )
 
     if not engagements.exists():
-        return HttpResponse("No current tenants with engagements were found.", status=404)
+        return HttpResponse("Keine aktuellen Bewohner mit Ämtern gefunden.", status=404)
 
     # Create the HttpResponse object with the appropriate CSV header.
     response = HttpResponse(
@@ -888,23 +871,22 @@ def _get_ldap_group_name_from_department(department_full_name, tenant):
 @transaction.atomic
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsHeimrat])
 def update_semester_and_ldap_view(request):
     """
     Updates the current semester and synchronizes LDAP groups for the old and new semester engagements.
     This is a critical, transactional operation.
     """
-    update_semester_and_ldap_view.required_groups = ['Heimrat', 'ADMIN']
     
     new_semester = request.data.get('new_semester')
     if not new_semester or not checkValidSemesterFormat(new_semester):
-        return Response({"error": "A valid 'new_semester' is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Gib das neue Semester als SS26 oder WS26/27 an."}, status=status.HTTP_400_BAD_REQUEST)
 
     settings = GlobalAppSettings.load()
     old_semester = settings.current_semester
     
     if new_semester == old_semester:
-        return Response({"message": "Semester is already set to the provided value. No action taken."}, status=status.HTTP_200_OK)
+        return Response({"message": "Das Semester ist schon eingestellt."}, status=status.HTTP_200_OK)
 
     group_base_dn = "ou=groups2,dc=schollheim,dc=net"
     ldap_errors = []
@@ -953,7 +935,7 @@ def update_semester_and_ldap_view(request):
     logger.info(f"Successfully updated semester from '{old_semester}' to '{new_semester}' and synchronized LDAP groups.")
 
     return Response({
-        "message": f"Semester successfully updated to {new_semester}. LDAP groups synchronized.",
+        "message": f"Semester auf {new_semester} umgestellt, die Rechte sind angepasst.",
         "removed_from_groups_for_semester": old_semester,
         "added_to_groups_for_semester": new_semester
     })
@@ -961,14 +943,13 @@ def update_semester_and_ldap_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CanViewResidentOverview])
 def export_tenants_csv(request):
     """
     API endpoint to export a CSV file of tenants.
     Filter by floor using query parameter: ?floor=H1EG or ?floor=all
     CSV format: "firstname","lastname","email","room_number"
     """
-    export_tenants_csv.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat","Finanzenreferat","Schlichtungsreferat", "ADMIN"]
     
     floor = request.GET.get('floor', 'all')
     
@@ -987,7 +968,7 @@ def export_tenants_csv(request):
     tenants = tenants.order_by('surname', 'name')
     
     if not tenants.exists():
-        return HttpResponse("No tenants found for the specified filter.", status=404)
+        return HttpResponse("Keine Bewohner für diesen Flur gefunden.", status=404)
     
     # Create CSV response
     response = HttpResponse(
@@ -1012,12 +993,11 @@ def export_tenants_csv(request):
 # --- Derpartment Management ---
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsNetworkAdmin])
 def list_departments_view(request):
     """
     Lists all departments.
     """
-    list_departments_view.required_groups = ['Netzwerkreferat']
 
     departments = Department.objects.all().order_by('name')
     serializer = DepartmentSerializer(departments, many=True)
@@ -1025,12 +1005,11 @@ def list_departments_view(request):
 
 @api_view(['POST'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsNetworkAdmin])
 def create_department_view(request):
     """
     Creates a new department.
     """
-    create_department_view.required_groups = ['Netzwerkreferat']
 
     serializer = NewDepartmentSerializer(data=request.data)
     if not serializer.is_valid():
@@ -1051,12 +1030,11 @@ def create_department_view(request):
 
 @api_view(['PUT'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsNetworkAdmin])
 def update_department_view(request, department_id):
     """
     Updates an existing department.
     """
-    update_department_view.required_groups = ['Netzwerkreferat']
 
     department = get_object_or_404(Department, id=department_id)
     serializer = DepartmentSerializer(department, data=request.data, partial=True)
@@ -1070,12 +1048,11 @@ def update_department_view(request, department_id):
 # ToDO: This is not completly correct yet. We need to check if there are engagements for this department first before deleting it. Now it will just fail and a user can only delete departments that dont have any engagement entries yet. But since this function isnt used often this is fine for now.
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([IsNetworkAdmin])
 def delete_department_view(request, department_id):
     """
     Deletes a department.
     """
-    delete_department_view.required_groups = ['Netzwerkreferat']
 
     department = get_object_or_404(Department, id=department_id)
     department.delete()
@@ -1086,12 +1063,11 @@ def delete_department_view(request, department_id):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CanViewResidentEngagements])
 def tenant_overview_data_view(request):
     """
     Retrieves a list of all current tenants, including their full details and all associated engagements.
     """
-    tenant_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat", "HSV-Vertreter", "ADMIN"]
     today = timezone.now().date()
     
     # Prefetch engagements and their related departments to avoid N+1 queries
@@ -1111,7 +1087,7 @@ def tenant_overview_data_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CanViewResidentStatistics])
 def tenant_statistics_view(request):
     """
     Returns aggregate statistics over tenants.
@@ -1120,12 +1096,11 @@ def tenant_statistics_view(request):
       ?scope=current  - only tenants currently living in the dorm (default)
       ?scope=all      - all tenants ever stored in the database
     """
-    tenant_statistics_view.required_groups = HEIMRAT_INFO_GROUPS
 
     scope = request.GET.get('scope', 'current').lower()
     if scope not in ['current', 'all']:
         return Response(
-            {"error": "Parameter 'scope' must be 'current' or 'all'."},
+            {"error": "Ungültiger Filter."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -1263,13 +1238,12 @@ def tenant_statistics_view(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated, GroupAndEmployeeTypePermission])
+@permission_classes([CanViewResidentOverview])
 def engagement_overview_data_view(request):
     """
     Retrieves all engagement entries, grouped by department.
     Each engagement includes minimal tenant info.
     """
-    engagement_overview_data_view.required_groups = ["Heimrat", "Inforeferat", "Zimmerreferat","Finanzenreferat","Schlichtungsreferat", "ADMIN"]
 
     # Query all engagements with related data
     engagements_query = Engagement.objects.select_related(
