@@ -4,6 +4,14 @@ Why things are the way they are. Newest first. Add an entry when you make or lea
 decision that someone might otherwise undo. Undated entries predate this log and were
 reconstructed from the code in September 2026.
 
+## 2026-09-26: Deciding again goes through revert, not a separate reset
+
+Residents sometimes pick the wrong option between moving out and extending, or change their
+plans. They can't undo it themselves; they write to the Verwaltung, which reverts the
+departure and creates it again from the candidates. A separate "reset decision" button was
+built and dropped: next to "Auszug zurückziehen" it was too confusing. Revert therefore also
+deletes the open extension claim. Details: [domain/tenant-lifecycle.md](domain/tenant-lifecycle.md).
+
 ## 2026-09-25: Prefer columns over tables
 
 New data that belongs to one existing thing becomes a column on that thing's table, including

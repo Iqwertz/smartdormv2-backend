@@ -62,7 +62,12 @@ candidates ───────────────────> CREATED �
 5. **Close** (`departures/<id>/close/`): only when every signature is in. An optional
    `move_out_date` overrides the date. The status becomes `CLOSED`, the resident gets a
    confirmation mail, and the Verwaltung can download the summary PDF (`download-pdf/`).
-6. **Revert** (`departures/<id>/revert/`): deletes the departure and the stored bank details.
+6. **Revert** (`departures/<id>/revert/`): deletes the departure, its signatures, the stored
+   bank details and an open (`CREATED`/`PROCESSING`) extension claim. Decided claims stay as
+   history. The resident can't undo their decision, so this is also how the Verwaltung lets
+   someone decide again (clicked wrong, plans changed): revert, then create the departure
+   again from the candidates, which sends the first mail again. The frontend offers
+   "Auszug zurückziehen" on the Auszügler cards and on both open tabs of the Verlängerungen page.
 
 ### Signatures (Unterschriften)
 

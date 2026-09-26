@@ -55,6 +55,10 @@ docs/                        knowledge base; docs/todo.md = open bugs and projec
 
 ## Rules
 
+- **Look for an existing feature before building a new one.** If something similar already
+  exists (an endpoint, a button, a flow), check whether it can be extended or combined
+  instead of adding a parallel solution. If it's unclear, ask first how it should be done.
+  Two features that do nearly the same thing confuse the Verwaltung and the residents.
 - **Every endpoint declares exactly one access rule** from `permissions.py`. The startup check
   `smartdorm.E001` enforces it. Access changes need the snapshot regenerated
   (`list_api_access --write-snapshot`) and matching `requiredGroups` in the frontend.
