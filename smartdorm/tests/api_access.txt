@@ -102,6 +102,7 @@ IsVerwaltung - VERWALTUNG, ADMIN
   POST            /api/department/departures/create/
   POST            /api/department/parcels/<str:external_id>/pickup/
   POST            /api/department/parcels/create/
+  POST            /api/department/subtenants/<int:subtenant_id>/resend-credentials/
   POST            /api/department/subtenants/create/
   POST            /api/department/tenant-data/<int:tenant_id>/move/
   POST            /api/department/tenant-data/<int:tenant_id>/resend-credentials/

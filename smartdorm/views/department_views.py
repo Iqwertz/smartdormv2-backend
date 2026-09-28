@@ -566,9 +566,10 @@ def create_subtenant_view(request):
         'username': username, 'password': password,
         'account_reused': bool(existing_username),
     }
+    subject, template = credential_utils.SUBTENANT_TEMPLATES[credential_utils.KIND_WELCOME]
     email_sent = email_utils.send_email_message(
-        recipient_list=[data['email']], subject="Dein Wlan Zugang als Untermieter",
-        html_template_name='email/user-account-creation-subtenant.html',
+        recipient_list=[data['email']], subject=subject,
+        html_template_name=template,
         context=email_context
     )
     if not email_sent:
@@ -695,6 +696,34 @@ def update_subtenant_view(request, subtenant_id):
         return Response(response_data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsVerwaltung])
+def resend_subtenant_credentials_view(request, subtenant_id):
+    """
+    Mails the subtenant a new password, as a welcome mail or a password reset mail
+    (body: {"kind": "WELCOME" | "PASSWORD_RESET"}). The old password stays valid if the
+    mail cannot be sent.
+    """
+
+    subtenant = get_object_or_404(Subtenant, id=subtenant_id)
+    kind = request.data.get('kind')
+    if kind not in credential_utils.SUBTENANT_TEMPLATES:
+        return Response({"error": "Unbekannte E-Mail-Art."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        sent = credential_utils.resend_subtenant_credentials(subtenant, kind)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ConnectionError as e:
+        logger.error(f"LDAP error while resending credentials to subtenant '{subtenant.email}': {e}", exc_info=True)
+        return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if not sent:
+        logger.warning(f"Resending credentials ({kind}) to subtenant '{subtenant.email}' failed; old password kept.")
+    return Response({"email_sent": sent}, status=status.HTTP_200_OK)
+
+
 @api_view(['DELETE'])
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsVerwaltung])
