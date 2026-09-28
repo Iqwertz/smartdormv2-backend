@@ -119,6 +119,7 @@ subtenant_urlpatterns = [
     path('create/', department_views.create_subtenant_view, name='subtenant-create'),
     path('<int:subtenant_id>/', department_views.get_subtenant_detail_view, name='subtenant-detail'),
     path('<int:subtenant_id>/update/', department_views.update_subtenant_view, name='subtenant-update'),
+    path('<int:subtenant_id>/resend-credentials/', department_views.resend_subtenant_credentials_view, name='subtenant-resend-credentials'),
     path('<int:subtenant_id>/delete/', department_views.delete_subtenant_view, name='subtenant-delete'),
 ]
 

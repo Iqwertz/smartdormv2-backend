@@ -41,9 +41,10 @@ Default groups are `DEFAULT_TENANT_LDAP_GROUPS` / `DEFAULT_SUBTENANT_LDAP_GROUPS
 `config.py`. Never mutate those lists; copy them (`list(...)`) before appending.
 
 **LDAP only stores hashes.** "Resending credentials" always means setting a new password
-(`credential_utils.resend_credentials()`). If the mail can't be sent, the old hashes are
-restored, so nobody is locked out. The self-service reset (`/api/auth/password-reset/`) finds
-the account by `mail`, which is why tenant edits also sync the mail to LDAP.
+(`credential_utils.resend_credentials()`, `resend_subtenant_credentials()` for subtenants).
+If the mail can't be sent, the old hashes are restored, so nobody is locked out. The
+self-service reset (`/api/auth/password-reset/`) finds the account by `mail`, which is why
+tenant edits also sync the mail to LDAP.
 
 ## Login and group mirroring
 

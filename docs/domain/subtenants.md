@@ -31,6 +31,11 @@ They get an LDAP account for the WLAN and the wiki, but no access to resident da
   the same email often belongs to a tenant account too. Every lookup skips accounts that belong
   to a `Tenant`.
 - Deleting a subtenant deletes the account only when it was the **last** row for that email.
+- The Verwaltung can mail new credentials from the edit page
+  (`subtenants/<id>/resend-credentials/`, `WELCOME` = the subtenant welcome mail or
+  `PASSWORD_RESET`). Like for tenants it sets a new password and puts the old one back if
+  the mail fails (`credential_utils.resend_subtenant_credentials()`). The account is found
+  with `find_subtenant_account()`, so a main tenant's password is never reset from here.
 - Accounts created before October 2025 carry employeeType `TENANT`.
   `is_subtenant_account()` still recognizes them: no tenant row for the username, but a
   running sublet on the email. Re-registering such a person stamps `SUBTENANT` on the account.
