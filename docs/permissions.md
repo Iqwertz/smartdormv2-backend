@@ -90,10 +90,11 @@ without a declaration.
 | `CheckedInView` | logged in; **the view decides per object** | cases where the right groups depend on the object (attendance events, departure signatures). The view must call `user_in_groups()` |
 | `IsSubtenant` | subtenant accounts | the subtenant dashboard |
 | `HasDeviceToken` | the Pi print agent (shared token) | `/api/printing/agent/*` |
-| `IsVerwaltung` | VERWALTUNG | tenants, subtenants, departures, claims, extensions, parcels, printer admin, tenant/room pickers |
+| `IsVerwaltung` | VERWALTUNG | tenants, subtenants, departures, claims, extensions, parcels, printer admin, room picker |
 | `IsHeimrat` | Heimrat | Heimrat page: applications, semester switch with LDAP sync |
 | `IsSemesterManager` | Heimrat, Netzwerkreferat | global semester and application switches |
 | `IsEngagementManager` | Heimrat, Inforeferat | Referate page |
+| `CanPickTenants` | VERWALTUNG, Heimrat, Inforeferat | the tenant picker (`/api/common/tenant-list/`) of forms that assign a tenant. Subtenants in it (`include=subtenants\|all`) stay Verwaltung-only, checked in the view |
 | `IsNetworkAdmin` | Netzwerkreferat | Netzwerkreferat page: departments, LDAP roles, logs |
 | `CanViewResidentOverview` | Heimrat, Info-, Zimmer-, Finanzen-, Schlichtungsreferat | Bewohnerübersicht: overview, Referate overview, CSV download |
 | `CanViewResidentEngagements` | the above + HSV-Vertreter | resident engagement table (overview and HSV tabs) |

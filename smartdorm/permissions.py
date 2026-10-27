@@ -205,6 +205,16 @@ class IsEngagementManager(GroupRule):
     groups = (Groups.HEIMRAT, Groups.INFOREFERAT)
 
 
+class CanPickTenants(GroupRule):
+    """
+    The tenant picker of forms that assign a tenant: the Verwaltung's, and the Heimrat's and
+    Referate page's (applications, engagements). Subtenants in it stay Verwaltung-only; the
+    view checks that.
+    """
+
+    groups = (Groups.VERWALTUNG, *IsEngagementManager.groups)
+
+
 class IsNetworkAdmin(GroupRule):
     """Netzwerkreferat page: departments, LDAP roles, logs."""
 
