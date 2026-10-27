@@ -18,6 +18,12 @@ once a semester.
   Mieter vergeben"), but `process_claim_decision_view` only passes `departureDate`,
   `departureDate1` and `departureDate2`, so the sentence ends with an empty date. Decide which
   date is meant and pass it.
+- [x] **The nightly sync strips the dev accounts' roles.** `recalculate_tenant_stats` treated
+  the dev accounts' dummy tenant records like real residents. They have no engagements, so it
+  removed `Heimrat`, the Referat groups etc. and added `Bewohner`/`wlan`/`wiki`. Only `ADMIN`
+  (not a managed group) and `dev-verwaltung` (no tenant record) survived.
+  *Fixed (2026-10-27):* `sync_ldap_roles` skips tenants with an
+  `@smartdorm-dev.invalid` mail (`is_dev_email()`).
 - [ ] **Former tenants keep their LDAP groups.** The nightly `recalculate_tenant_stats` only
   reconciles *current* tenants, so after moving out, people keep their floor, Referat, HSV
   and default groups (wlan, wiki, Bewohner, tenant).

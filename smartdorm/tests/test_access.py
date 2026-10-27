@@ -32,7 +32,7 @@ from smartdorm.permissions import (
     user_in_groups,
 )
 from smartdorm.serializers import TenantSerializer
-from smartdorm.views import attendance_views, department_views
+from smartdorm.views import attendance_views, department_views, shared_views
 
 factory = APIRequestFactory()
 
@@ -179,7 +179,7 @@ class EndpointAccessTests(SimpleTestCase):
         self.assert_reaches_exactly(FakeUser("tenant"), self.ANY_LOGIN)
 
     def test_the_verwaltung_account_reaches_the_verwaltung_area(self):
-        self.assert_reaches_exactly(FakeUser(Groups.VERWALTUNG, employee_type="DEPARTMENT"), self.ANY_LOGIN | {"IsVerwaltung"})
+        self.assert_reaches_exactly(FakeUser(Groups.VERWALTUNG, employee_type="DEPARTMENT"), self.ANY_LOGIN | {"IsVerwaltung", "CanPickTenants"})
 
     def test_admin_reaches_every_group_endpoint_despite_being_a_tenant_account(self):
         everything_but_devices_and_subtenants = {
@@ -201,6 +201,20 @@ class PerObjectCheckTests(SimpleTestCase):
         event = SimpleNamespace(admin_groups=[Groups.HEIMRAT])
         self.assertTrue(attendance_views._is_event_admin(SimpleNamespace(user=FakeUser(Groups.HEIMRAT)), event))
         self.assertFalse(attendance_views._is_event_admin(SimpleNamespace(user=FakeUser("Barreferat")), event))
+
+    def test_the_tenant_picker_shows_subtenants_to_the_verwaltung_only(self):
+        def status_for(user, include):
+            request = factory.get(f"/api/common/tenant-list/?include={include}")
+            force_authenticate(request, user=user)
+            with mock.patch.object(shared_views.Tenant, "objects"), mock.patch.object(shared_views.Subtenant, "objects"):
+                return shared_views.tenants_for_select_view(request).status_code
+
+        for group in (Groups.HEIMRAT, Groups.INFOREFERAT):
+            with self.subTest(group=group):
+                self.assertEqual(status_for(FakeUser("tenant", group), "tenants"), 200)
+                self.assertEqual(status_for(FakeUser("tenant", group), "subtenants"), 403)
+                self.assertEqual(status_for(FakeUser("tenant", group), "all"), 403)
+        self.assertEqual(status_for(FakeUser(Groups.VERWALTUNG, employee_type="DEPARTMENT"), "all"), 200)
 
     def test_an_event_without_a_group_list_is_admin_only(self):
         event = SimpleNamespace(admin_groups=None)

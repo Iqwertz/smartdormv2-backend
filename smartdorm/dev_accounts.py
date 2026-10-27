@@ -30,6 +30,11 @@ TEST_LDAP_HOSTS = {"ldap-test.schollheim.net"}
 TEST_DATABASE_HOSTS = {"db-test-smartdorm-v2.schollheim.net", "localhost", "127.0.0.1"}
 
 
+def is_dev_email(email):
+    """True for the mail of a dev account or its tenant record - .invalid can't belong to a real person."""
+    return (email or "").strip().lower().endswith("@" + EMAIL_DOMAIN)
+
+
 def non_test_targets(ldap_uri, database_host):
     """What in the given configuration is not a known test system - empty if it is safe."""
     problems = []

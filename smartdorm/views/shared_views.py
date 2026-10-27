@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 
-from ..permissions import LoggedIn, IsVerwaltung
+from ..permissions import CanPickTenants, LoggedIn, IsVerwaltung, user_in_groups
 from ..models import Tenant, Subtenant, Room, Department
 from ..serializers import DepartmentSerializer
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
-@permission_classes([IsVerwaltung])
+@permission_classes([CanPickTenants])
 def tenants_for_select_view(request):
     """
      API endpoint to retrieve a list of current tenants with minimal data 
@@ -24,11 +24,15 @@ def tenants_for_select_view(request):
     - 'tenants' (default): Only tenants
     - 'subtenants': Only subtenants
     - 'all': Both tenants and subtenants
+    Subtenants are for the Verwaltung only; the Heimrat and the Referate pick tenants.
      """
     
     today = timezone.now().date()
     
     include_filter = request.GET.get('include', 'tenants').lower()    
+    if include_filter in ['subtenants', 'all'] and not user_in_groups(request.user, IsVerwaltung.groups):
+        return Response({"detail": "Dafür fehlen dir die Rechte."}, status=status.HTTP_403_FORBIDDEN)
+
     recipients_list = []
     
     try:

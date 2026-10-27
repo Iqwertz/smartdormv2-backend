@@ -1,3 +1,6 @@
+CanPickTenants - VERWALTUNG, Heimrat, Inforeferat, ADMIN
+  GET             /api/common/tenant-list/
+
 CanViewResidentEngagements - Heimrat, Inforeferat, Zimmerreferat, Finanzenreferat, Schlichtungsreferat, HSV-Vertreter, ADMIN
   GET             /api/engagements/misc/tenant-overview-data/
 
@@ -74,7 +77,6 @@ IsVerwaltung - VERWALTUNG, ADMIN
   DELETE,GET      /api/department/tenant-data/<int:tenant_id>/termination/
   DELETE,PUT      /api/department/department-extensions/<int:extension_id>/
   GET             /api/common/room-list/
-  GET             /api/common/tenant-list/
   GET             /api/department/claims/list/
   GET             /api/department/departures/<int:departure_id>/download-pdf/
   GET             /api/department/departures/candidates/
