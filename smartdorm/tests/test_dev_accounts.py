@@ -4,11 +4,14 @@ from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 
+from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
+from django_auth_ldap.backend import LDAPBackend, _LDAPUser, _LDAPUserGroups
 from rest_framework.test import APIRequestFactory
 
 from smartdorm import permissions
 from smartdorm.dev_accounts import DEV_ACCOUNTS, DUMMY_NAME, EMAIL_DOMAIN, is_dev_email, non_test_targets
+from smartdorm.management.commands.dev_accounts import Command as DevAccountsCommand
 from smartdorm.management.commands.recalculate_tenant_stats import Command as NightlySyncCommand
 from smartdorm.tests.test_access import FakeUser
 from smartdorm.views.auth_views import dev_accounts_view
@@ -86,6 +89,27 @@ class NightlySyncTests(SimpleTestCase):
         synced = {call.args[3] for call in command._add_to_group.call_args_list + command._remove_from_group.call_args_list}
         self.assertEqual(synced, {"j.doe"})
         command._remove_from_group.assert_called_once_with(mock.ANY, mock.ANY, heimrat_dn, "j.doe")
+
+
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+class LdapCacheTests(SimpleTestCase):
+    """After a refresh, the next login must see the new groups, not django-auth-ldap's cached ones."""
+
+    def test_forgets_what_django_auth_ldap_cached(self):
+        user_dn = "cn=dev-heimrat,ou=users,dc=schollheim,dc=net"
+
+        # Let django-auth-ldap fill the cache itself, so a changed key format fails here.
+        ldap_user = _LDAPUser(LDAPBackend(), username="dev-heimrat")
+        with mock.patch.object(_LDAPUser, "connection", new_callable=mock.PropertyMock), \
+                mock.patch.object(ldap_user.settings.USER_SEARCH, "execute", return_value=[(user_dn, {})]):
+            ldap_user._search_for_user_dn()
+        groups = _LDAPUserGroups(SimpleNamespace(settings=ldap_user.settings, dn=user_dn))
+        groups._group_names = {"Bewohner", "tenant"}
+        groups._cache_attr("_group_names")
+        self.assertEqual(len(cache._cache), 2)
+
+        DevAccountsCommand().forget_cached_ldap_lookups("dev-heimrat")
+        self.assertEqual(len(cache._cache), 0)
 
 
 class TestTargetGuardTests(SimpleTestCase):

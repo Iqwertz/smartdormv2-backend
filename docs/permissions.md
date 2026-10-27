@@ -18,7 +18,7 @@ The SmartDorm backend uses a combination of LDAP for user identity and Django's 
     }
     ```
 *   **User Type (`employeeType`)**: A crucial detail is that the LDAP `employeeType` attribute (e.g., 'TENANT', 'DEPARTMENT') is mapped to the Django `user.first_name` field. Access rules do not use it (see Permissions); it is used to recognise subtenant accounts.
-*   **Group Sync**: At login, the user's LDAP groups (from `ou=groups`, `ou=roles` and `ou=groups2`) are copied by name (`cn`) onto the Django user (`AUTH_LDAP_MIRROR_GROUPS`). Both the access rules and the frontend (via `GET /api/auth/me/`) read this copy. It is only refreshed at login, and sessions last up to two weeks: **a group change in LDAP takes effect at the user's next login.**
+*   **Group Sync**: At login, the user's LDAP groups (from `ou=groups`, `ou=roles` and `ou=groups2`) are copied by name (`cn`) onto the Django user (`AUTH_LDAP_MIRROR_GROUPS`). Both the access rules and the frontend (via `GET /api/auth/me/`) read this copy. It is only refreshed at login, and sessions last up to two weeks: **a group change in LDAP takes effect at the user's next login.** Logins also reuse django-auth-ldap's cached LDAP lookups (DN and group names, in Redis, `AUTH_LDAP_CACHE_TIMEOUT` = 1 hour). So a login within an hour of the previous one can still mirror the old groups.
 
 ### Session Management
 
@@ -208,6 +208,8 @@ employeeType), so you see SmartDorm exactly as that role does:
 * **Creating or refreshing them:** `python manage.py dev_accounts`. It asks for the shared
   password and resets every account to it, and it adds missing group memberships. Run it again
   after adding a group to `Groups`, and the new role gets its account. `--delete` removes them.
+  It also clears django-auth-ldap's cached lookups of the accounts in the running
+  environment's cache, so the next login sees the new groups right away.
   The command refuses to run unless the LDAP and the database are known test systems
   (`TEST_LDAP_HOSTS` / `TEST_DATABASE_HOSTS` in `smartdorm/dev_accounts.py`), or when
   `PRODUCTION` is set. It also only touches accounts and tenant records whose mail is
