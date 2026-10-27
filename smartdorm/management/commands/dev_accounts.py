@@ -3,10 +3,12 @@ from getpass import getpass
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
+from django_auth_ldap.backend import valid_cache_key
 
 from smartdorm.dev_accounts import DEV_ACCOUNTS, non_test_targets
 from smartdorm.models import Tenant
@@ -71,6 +73,18 @@ class Command(BaseCommand):
             self.stderr.write(f"  {account.username}: group(s) not found in this LDAP, skipped: {', '.join(missing)}")
         return [group_dns[cn] for cn in account.groups if cn in group_dns]
 
+    def forget_cached_ldap_lookups(self, username):
+        """
+        django-auth-ldap caches a user's DN and groups for AUTH_LDAP_CACHE_TIMEOUT, so without
+        this a login within that time would still mirror the groups from before the refresh.
+        Clears the cache of the environment running the command (locally: the local Redis).
+        """
+        user_dn = f"cn={username},ou=users,dc=schollheim,dc=net"
+        cache.delete_many([
+            valid_cache_key(f"django_auth_ldap.user_dn.{username}"),
+            valid_cache_key(f"auth_ldap._LDAPUserGroups._group_names.{user_dn}"),
+        ])
+
     def create_accounts(self, group_dns, password):
         for account in DEV_ACCOUNTS:
             dns = self.resolve_groups(account, group_dns)
@@ -90,6 +104,8 @@ class Command(BaseCommand):
                 self.stdout.write(f"  refreshed {account.username}")
             else:
                 self.stderr.write(f"  {account.username} exists but is not a dev account - left untouched.")
+                continue
+            self.forget_cached_ldap_lookups(account.username)
 
     def delete_accounts(self, group_dns):
         for account in DEV_ACCOUNTS:
@@ -100,6 +116,7 @@ class Command(BaseCommand):
                 ldap_utils.remove_user_from_group(account.username, dn)
             ldap_utils.delete_ldap_user(account.username)
             User.objects.filter(username=account.username).delete()  # the mirrored Django user
+            self.forget_cached_ldap_lookups(account.username)
             self.stdout.write(f"  deleted   {account.username}")
 
     @transaction.atomic
