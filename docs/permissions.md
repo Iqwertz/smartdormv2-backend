@@ -222,6 +222,9 @@ employeeType), so you see SmartDorm exactly as that role does:
   "Testdaten" everywhere else, and a mail at `@smartdorm-dev.invalid`. Verwaltung will see
   these records in its lists. Rerunning the command resets them; `--delete` removes them,
   along with anything created on them while testing.
+* **Nightly sync:** `recalculate_tenant_stats` skips accounts whose tenant record has a
+  `@smartdorm-dev.invalid` mail. Otherwise it would strip their role groups, since they hold
+  them without engagements (see [ldap.md](ldap.md#the-nightly-sync)).
 * **Limitation:** `dev-untermieter` has no subtenant record, because one would have to point
   at a real room and a real main tenant. Its dashboard therefore has no data, but its access
   checks can be tested.

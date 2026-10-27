@@ -51,6 +51,7 @@ Important env vars (full list in `.sample.env`):
 | `LOCAL_ENV` | `True` on localhost: cookies aren't scoped to `.schollheim.net`. |
 | `LDAP_URI`, `LDAP_ADMIN_PASSWORD` | Use `ldap-test.schollheim.net` in development. |
 | `SHOW_DEV_ACCOUNTS` | Test systems only: the login page offers the dev accounts. |
+| `DEV_ACCOUNTS_PASSWORD` | Local dev only: the dev accounts' shared password, so `start-dev.sh` can refresh them. |
 | `REDIS_URL`, `DB_*`, `POSTGRES_*`, `SECRET_KEY`, `EMAIL_HOST_PASSWORD` | the obvious |
 | `DEVICE_AGENT_TOKEN` | shared secret of the Pi print agent |
 
@@ -84,6 +85,10 @@ The test LDAP has one account per role (`dev-bewohner`, `dev-verwaltung`, `dev-h
 `manage.py dev_accounts` creates or resets them (it refuses to run against anything but the
 test LDAP and test DB), and `SHOW_DEV_ACCOUNTS=True` puts them on the login page. Details in
 [permissions.md](permissions.md#trying-it-out-dev-accounts).
+
+The nightly LDAP sync skips the dev accounts, so their role groups stay. The workspace's
+`start-dev.sh` still reruns `dev_accounts` on every start when `DEV_ACCOUNTS_PASSWORD` is set
+in `.env`, which also resets their dummy tenant records.
 
 ## Useful commands
 

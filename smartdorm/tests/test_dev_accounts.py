@@ -8,7 +8,8 @@ from django.test import SimpleTestCase, override_settings
 from rest_framework.test import APIRequestFactory
 
 from smartdorm import permissions
-from smartdorm.dev_accounts import DEV_ACCOUNTS, DUMMY_NAME, EMAIL_DOMAIN, non_test_targets
+from smartdorm.dev_accounts import DEV_ACCOUNTS, DUMMY_NAME, EMAIL_DOMAIN, is_dev_email, non_test_targets
+from smartdorm.management.commands.recalculate_tenant_stats import Command as NightlySyncCommand
 from smartdorm.tests.test_access import FakeUser
 from smartdorm.views.auth_views import dev_accounts_view
 
@@ -43,6 +44,48 @@ class DevAccountTests(SimpleTestCase):
         usernames = [a.username for a in DEV_ACCOUNTS]
         self.assertEqual(len(usernames), len(set(usernames)))
         self.assertTrue(all(u.startswith("dev-") for u in usernames))
+
+
+class NightlySyncTests(SimpleTestCase):
+    """The nightly LDAP sync must leave the dev accounts' role groups alone - they have no engagements."""
+
+    def test_recognises_dev_mails_only(self):
+        for account in DEV_ACCOUNTS:
+            self.assertTrue(is_dev_email(account.email))
+        self.assertTrue(is_dev_email(" DEV-Heimrat@SMARTDORM-DEV.INVALID "))
+        self.assertFalse(is_dev_email("someone@example.com"))
+        self.assertFalse(is_dev_email("someone@smartdorm-dev.invalid.example.com"))
+        self.assertFalse(is_dev_email(None))
+
+    def tenant(self, username, email):
+        return SimpleNamespace(
+            username=username, email=email, current_floor=None,
+            engagement_set=SimpleNamespace(all=lambda: []),
+        )
+
+    @mock.patch("smartdorm.management.commands.recalculate_tenant_stats.custom_role_dns_by_username", return_value={})
+    @mock.patch("smartdorm.management.commands.recalculate_tenant_stats.Department")
+    @mock.patch("smartdorm.management.commands.recalculate_tenant_stats.Room")
+    @mock.patch("smartdorm.management.commands.recalculate_tenant_stats.ldap")
+    def test_skips_dev_tenants_but_still_syncs_real_ones(self, _ldap, room, department, _custom_roles):
+        room.objects.values_list.return_value.distinct.return_value = []
+        department.objects.all.return_value = [SimpleNamespace(full_name="Heimrat")]
+        heimrat_dn = "cn=heimrat,ou=groups2,dc=schollheim,dc=net"
+
+        command = NightlySyncCommand()
+        command.dry_run = False
+        command.revoke_expired_role_assignments = mock.Mock()
+        command.sync_subtenant_ldap_roles = mock.Mock()
+        command._get_user_groups = mock.Mock(return_value={heimrat_dn})
+        command._add_to_group = mock.Mock()
+        command._remove_from_group = mock.Mock()
+
+        tenants = [self.tenant("dev-heimrat", "dev-heimrat@" + EMAIL_DOMAIN), self.tenant("j.doe", "j.doe@example.com")]
+        command.sync_ldap_roles(tenants, current_semester="WS26", today=date(2026, 10, 27))
+
+        synced = {call.args[3] for call in command._add_to_group.call_args_list + command._remove_from_group.call_args_list}
+        self.assertEqual(synced, {"j.doe"})
+        command._remove_from_group.assert_called_once_with(mock.ANY, mock.ANY, heimrat_dn, "j.doe")
 
 
 class TestTargetGuardTests(SimpleTestCase):

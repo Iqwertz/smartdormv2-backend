@@ -81,7 +81,9 @@ stats, writing LDAP or deleting expired role records.
    and deleted.
 3. **Current tenants:** the groups they *should* have = defaults + floor + (if they have an
    engagement this semester) `HSV` + their Referat groups + valid manual roles. Missing ones
-   are added. Extra ones are removed **only if they are managed groups**.
+   are added. Extra ones are removed **only if they are managed groups**. Dev accounts
+   (tenant mail `@smartdorm-dev.invalid`) are skipped: they hold their role groups without
+   engagements, and `manage.py dev_accounts` manages them.
 4. **Subtenants**, matched by email among `SUBTENANT` accounts: a running sublet → defaults +
    floor. All sublets over → managed groups removed. Not started yet → untouched.
 

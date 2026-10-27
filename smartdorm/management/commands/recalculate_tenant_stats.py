@@ -9,6 +9,7 @@ from ldap.filter import escape_filter_chars
 
 from smartdorm.models import Tenant, Engagement, GlobalAppSettings, Department, Subtenant, Room, LdapRoleAssignment
 from smartdorm import config as app_config
+from smartdorm.dev_accounts import is_dev_email
 from smartdorm.utils.ldap_sync import floor_group_dn, subtenant_target_group_dns, subtenant_managed_group_dns, custom_role_dns_by_username, SUBTENANT_EMPLOYEE_TYPE
 
 # Configure logging
@@ -182,6 +183,11 @@ class Command(BaseCommand):
             # --- 2. Process Tenants ---
             for tenant in tenants:
                 if not tenant.username:
+                    continue
+
+                # Dev accounts hold their role groups without engagements; `manage.py
+                # dev_accounts` manages their groups, so the sync must not strip them.
+                if is_dev_email(tenant.email):
                     continue
 
                 user_dn = f"cn={tenant.username},ou=users,dc=schollheim,dc=net"
